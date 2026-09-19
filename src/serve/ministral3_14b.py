@@ -237,7 +237,11 @@ class Ministral3Server:
         self.llm.shutdown()
 
 
-@app.function(routing_region=ROUTING_REGION, timeout=15 * MINUTES)
+@app.function(
+    routing_region=ROUTING_REGION,
+    timeout=15 * MINUTES,
+    secrets=[modal.Secret.from_name("huggingface-secret")],
+)
 async def test_ministral(n_samples: int):
     llm = Ministral3Server()
     await llm.boot.remote.aio()
