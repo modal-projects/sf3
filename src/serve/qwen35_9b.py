@@ -212,7 +212,11 @@ class Qwen35Server:
         self.llm.shutdown()
 
 
-@app.function(routing_region=ROUTING_REGION, timeout=15 * MINUTES)
+@app.function(
+    routing_region=ROUTING_REGION,
+    timeout=15 * MINUTES,
+    secrets=[modal.Secret.from_name("huggingface-secret")],
+)
 async def test_qwen35(n_samples: int):
     llm = Qwen35Server()
     await llm.boot.remote.aio()

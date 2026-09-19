@@ -175,7 +175,11 @@ class Qwen3VLServer:
         self.llm.shutdown()
 
 
-@app.function(routing_region=ROUTING_REGION, timeout=60 * MINUTES)
+@app.function(
+    routing_region=ROUTING_REGION,
+    timeout=60 * MINUTES,
+    secrets=[modal.Secret.from_name("huggingface-secret")],
+)
 async def test_qwen3(n_samples: int, ckpt_path: str = ""):
     llm = Qwen3VLServer(ckpt_path=ckpt_path)
     await llm.boot.remote.aio()
