@@ -14,6 +14,7 @@ cd sf3
 # install dependencies
 uv sync
 source .venv/bin/activate
+uvx pre-commit install
 
 # set up Modal
 modal setup
@@ -37,7 +38,7 @@ modal secret create wandb-secret WANDB_API_KEY=your-key
 
 ### Commands
 
-For demos, prepend web app commands with `SF3_WARM_MODELS=1`.
+Prepend web app commands with `SF3_WARM_MODELS=1` to avoid cold-starts.
 
 ```bash
 # evaluate llms +/- cpu on every character matchup

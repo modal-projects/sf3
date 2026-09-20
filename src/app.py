@@ -40,7 +40,6 @@ app = modal.App(name="sf3")
 for model in MODELS.values():
     app.include(model.app)
 
-VERSUS_START_OFFSET_FRAMES = 30
 CONTROL_MESSAGE_QUEUE_LIMIT = 128
 SESSION_TASK_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 
@@ -53,8 +52,7 @@ remote_logos_dir = "/root/logos"
 remote_sounds_dir = "/root/sounds"
 
 static_image = (
-    modal.Image
-    .debian_slim(python_version="3.12")
+    modal.Image.debian_slim(python_version="3.12")
     .uv_pip_install(
         "fastapi[standard]==0.116.1",
     )
@@ -444,10 +442,12 @@ class Web:
 
             async def send_game_state(self):
                 self.sync_accepts_input_state()
-                await self.outbound_message_queue.put({
-                    "type": "game_state",
-                    "data": make_json_safe(self.game_state),
-                })
+                await self.outbound_message_queue.put(
+                    {
+                        "type": "game_state",
+                        "data": make_json_safe(self.game_state),
+                    }
+                )
 
             async def handle_inbound_message(self, data):
                 message_type = data.get("type", "unknown")
@@ -646,14 +646,16 @@ class Web:
                         return
                     if websocket.client_state == WebSocketState.DISCONNECTED:
                         return
-                    await websocket.send_json({
-                        "type": "ice_candidate",
-                        "candidate": {
-                            "candidate_sdp": candidate.to_sdp(),
-                            "sdpMid": candidate.sdpMid,
-                            "sdpMLineIndex": candidate.sdpMLineIndex,
-                        },
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "ice_candidate",
+                            "candidate": {
+                                "candidate_sdp": candidate.to_sdp(),
+                                "sdpMid": candidate.sdpMid,
+                                "sdpMLineIndex": candidate.sdpMLineIndex,
+                            },
+                        }
+                    )
                 except Exception:
                     print(f"Error sending ICE candidate: {traceback.format_exc()}")
 
@@ -747,11 +749,13 @@ class Web:
                             )
                             answer = await pc.createAnswer()
                             await pc.setLocalDescription(answer)
-                            await websocket.send_json({
-                                "type": "answer",
-                                "sdp": pc.localDescription.sdp,
-                                "peer_id": "server",
-                            })
+                            await websocket.send_json(
+                                {
+                                    "type": "answer",
+                                    "sdp": pc.localDescription.sdp,
+                                    "peer_id": "server",
+                                }
+                            )
                             continue
 
                         if message_type == "ice_candidate":
@@ -824,14 +828,18 @@ class Web:
                 try:
                     while not session.stop_event.is_set():
                         if websocket.client_state != WebSocketState.DISCONNECTED:
-                            await websocket.send_json({
+                            await websocket.send_json(
+                                {
+                                    "type": "heartbeat",
+                                    "peer_id": "server",
+                                }
+                            )
+                        await session.outbound_message_queue.put(
+                            {
                                 "type": "heartbeat",
-                                "peer_id": "server",
-                            })
-                        await session.outbound_message_queue.put({
-                            "type": "heartbeat",
-                            "data": {},
-                        })
+                                "data": {},
+                            }
+                        )
                         try:
                             await asyncio.wait_for(
                                 session.stop_event.wait(),
@@ -915,12 +923,12 @@ class Web:
                     event_loop.call_soon_threadsafe(begin_non_fight_phase, generation)
                 video_track.queue_frame(np.ascontiguousarray(frame))
 
-            def send_presentation(name: str):
+            def send_presentation(name: str, **fields):
                 event_loop.call_soon_threadsafe(
                     session.outbound_message_queue.put_nowait,
                     {
                         "type": "presentation",
-                        "data": {"name": name},
+                        "data": {"name": name, **fields},
                     },
                 )
 
@@ -1005,21 +1013,12 @@ class Web:
                         player2_is_model = is_model_participant(player2_participant)
                         if not (player1_is_model or player2_is_model):
                             continue
-                        if (
-                            player1_is_model
-                            and player2_is_model
-                            and (
-                                session.player1_next_buttons
-                                or session.player2_next_buttons
-                            )
-                        ):
-                            continue
 
                         snapshot = snapshot_robot_observation()
                         if snapshot is None:
                             continue
                         requests = []
-                        if player1_is_model:
+                        if player1_is_model and not session.player1_next_buttons:
                             requests.append(
                                 generate_robot_move(
                                     1,
@@ -1027,7 +1026,7 @@ class Web:
                                     snapshot,
                                 )
                             )
-                        if player2_is_model:
+                        if player2_is_model and not session.player2_next_buttons:
                             requests.append(
                                 generate_robot_move(
                                     2,
@@ -1035,6 +1034,8 @@ class Web:
                                     snapshot,
                                 )
                             )
+                        if not requests:
+                            continue
 
                         results = await asyncio.gather(*requests)
                         if action_generation != session.action_generation:
@@ -1223,7 +1224,6 @@ class Web:
                         )
                         models_loading_frames_remaining = None
                         models_ready_checked = False
-                        versus_frames_after_lock = None
 
                         session.game_running = True
                         session.accepts_input = False
@@ -1321,11 +1321,7 @@ class Web:
                                 and session.info.get("player1_selected")
                                 and session.info.get("player2_selected")
                             )
-                            if (
-                                both_selected_while_selecting
-                                and versus_frames_after_lock is None
-                            ):
-                                versus_frames_after_lock = 0
+                            if both_selected_while_selecting:
                                 if (
                                     not models_ready_checked
                                     and models_loading_frames_remaining is None
@@ -1333,13 +1329,10 @@ class Web:
                                     models_loading_frames_remaining = (
                                         models_loading_delay_frames
                                     )
-                                session.accepts_input = False
-                                session.invalidate_actions()
-                                selection_changed = True
-                            if versus_frames_after_lock == VERSUS_START_OFFSET_FRAMES:
-                                send_presentation("versus")
-                            if versus_frames_after_lock is not None:
-                                versus_frames_after_lock += 1
+                                if session.accepts_input:
+                                    session.accepts_input = False
+                                    session.invalidate_actions()
+                                    selection_changed = True
                             if selection_changed:
                                 await session.send_game_state()
 
@@ -1531,13 +1524,15 @@ def resolve_gameplay_base_url(
                 ("--sf3.modal.run", f"--gameplay.{ROUTING_REGION}.modal.run"),
             ):
                 if netloc.endswith(static_suffix):
-                    return urlunsplit((
-                        parsed.scheme,
-                        netloc[: -len(static_suffix)] + gameplay_suffix,
-                        "",
-                        "",
-                        "",
-                    ))
+                    return urlunsplit(
+                        (
+                            parsed.scheme,
+                            netloc[: -len(static_suffix)] + gameplay_suffix,
+                            "",
+                            "",
+                            "",
+                        )
+                    )
         except ValueError:
             pass
 

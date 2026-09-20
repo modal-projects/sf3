@@ -176,6 +176,8 @@ async def play_game(
         if truncated or not info.get("game_done"):
             raise RuntimeError("Episode ended without normal game completion")
         seat_winner = info.get("winner")
+        if seat_winner == "draw":
+            return "draw"
         if seat_winner not in {"P1", "P2"}:
             raise RuntimeError(f"Environment returned invalid winner: {seat_winner!r}")
         return player1 if seat_winner == "P1" else player2
@@ -231,7 +233,7 @@ async def play_match(
                     encoder,
                     reset_task.result(),
                 )
-                if winner not in {a, b}:
+                if winner != "draw" and winner not in {a, b}:
                     raise RuntimeError(f"Invalid game winner: {winner!r}")
             finally:
                 await close_environment(env)
@@ -257,6 +259,7 @@ async def play_match(
     routing_region=ROUTING_REGION,
     timeout=MATCH_TIMEOUT,
     retries=MATCH_RETRIES,
+    secrets=[modal.Secret.from_name("huggingface-secret")],
 )
 async def execute_match(
     job: dict[str, Any],
@@ -416,7 +419,7 @@ async def orchestrate(base: bool = False, ckpt_path: str = "") -> dict[str, Any]
         ),
     ):
         a, b = match["pair"]
-        score_a = float(match["winner"] == a)
+        score_a = 0.5 if match["winner"] == "draw" else float(match["winner"] == a)
         expected_a = 1 / (1 + 10 ** ((ratings[b] - ratings[a]) / 400))
         ratings[a] += K_FACTOR * (score_a - expected_a)
         ratings[b] += K_FACTOR * (expected_a - score_a)
@@ -425,10 +428,13 @@ async def orchestrate(base: bool = False, ckpt_path: str = "") -> dict[str, Any]
         a, b = match["pair"]
         summary = pair_results.setdefault(
             (a, b),
-            {"pair": [a, b], "matches": 0, "wins": {a: 0, b: 0}},
+            {"pair": [a, b], "matches": 0, "wins": {a: 0, b: 0}, "draws": 0},
         )
         summary["matches"] += 1
-        summary["wins"][match["winner"]] += 1
+        if match["winner"] == "draw":
+            summary["draws"] += 1
+        else:
+            summary["wins"][match["winner"]] += 1
     pair_summaries = sorted(
         pair_results.values(),
         key=lambda summary: (
@@ -463,7 +469,6 @@ async def orchestrate(base: bool = False, ckpt_path: str = "") -> dict[str, Any]
         }
         for rank, player in enumerate(order, 1)
     ]
-
     # save report
 
     directory = Path("/cache") / run_output_dir
