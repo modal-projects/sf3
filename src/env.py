@@ -24,9 +24,8 @@ _TERMINAL_MIN_SECONDS = 20
 _TOURNAMENT_WIN_MIN_SECONDS = 60
 _TERMINAL_MAX_SECONDS = 120
 _TERMINAL_IDLE_SECONDS = 5
-_GAME_OVER_CUE_SECONDS = 10
 FrameSink = Callable[[Any], None]
-PresentationSink = Callable[[str], None]
+PresentationSink = Callable[..., None]
 
 # Raw emulator ids used by MAME / sfiii-gym.
 # Intentionally different than CHARACTER_TO_ID in utils.py
@@ -364,6 +363,7 @@ class LocalSfiiiAdapter:
         self._cpu_difficulty = config.cpu_difficulty
         self._match_identity: dict[str, dict[str, Any]] | None = None
         self._presentation_sink: PresentationSink | None = None
+        self._versus_presented = False
         self._frame_pacer = _FramePacer()
 
     def pregame_step(
@@ -485,7 +485,12 @@ class LocalSfiiiAdapter:
                     # fighters at once, so rank on wins -> remaining health
                     p1_score = (int(raw["winsP1"]), int(raw["healthP1"]))
                     p2_score = (int(raw["winsP2"]), int(raw["healthP2"]))
-                    winner = "P2" if p2_score > p1_score else "P1"
+                    if p1_score > p2_score:
+                        winner = "P1"
+                    elif p2_score > p1_score:
+                        winner = "P2"
+                    else:
+                        winner = "draw"
             if stage_done:
                 self._data = self._wait_for_post_ko_black_frame(raw, frame_sink)
                 self._emit_presentation("winner")
@@ -505,7 +510,7 @@ class LocalSfiiiAdapter:
                     raw,
                     frame_sink,
                     tournament_won=tournament_won,
-                    show_continue=tournament_mode and p2_won_match,
+                    winner=winner,
                 )
                 self._data["reward"] = reward
         else:
@@ -581,9 +586,18 @@ class LocalSfiiiAdapter:
             self._frame_pacer.wait()
             frame_sink(data["frame"])
 
-    def _emit_presentation(self, name: str) -> None:
+    def _emit_presentation(self, name: str, **fields: Any) -> None:
         if self._presentation_sink is not None:
-            self._presentation_sink(name)
+            self._presentation_sink(name, **fields)
+
+    def _emit_fight_presentation(self, data: Mapping[str, Any]) -> None:
+        kwargs: dict[str, Any] = {
+            "round_number": int(data["winsP1"]) + int(data["winsP2"]) + 1,
+        }
+        if self._match_identity is not None:
+            kwargs["player1"] = self._match_identity["player1"]
+            kwargs["player2"] = self._match_identity["player2"]
+        self._emit_presentation("fight", **kwargs)
 
     def _phase_step(
         self,
@@ -749,6 +763,9 @@ class LocalSfiiiAdapter:
             )
         else:
             player2_selected = int(self._data["characterSelectStateP2"]) >= 5
+        if player1_selected and player2_selected and not self._versus_presented:
+            self._versus_presented = True
+            self._emit_presentation("versus")
         if int(self._data["fighting"]) != 0:
             player1_selected = True
             player2_selected = True
@@ -764,6 +781,7 @@ class LocalSfiiiAdapter:
             }
             self._data = self._sub_step([])
             self._emit_frame(self._data, frame_sink)
+            self._emit_fight_presentation(self._data)
         observation = _normalize_local_observation(self._data)
         info = {
             "game_done": False,
@@ -932,6 +950,7 @@ class LocalSfiiiAdapter:
             "player1": self.read_player_identity("P1"),
             "player2": self.read_player_identity("P2"),
         }
+        self._emit_fight_presentation(data)
         return data
 
     def _new_game(
@@ -939,6 +958,7 @@ class LocalSfiiiAdapter:
         frame_sink: FrameSink | None,
         presentation_sink: PresentationSink | None = None,
     ) -> None:
+        self._versus_presented = False
         self._wait_for_boot_ready(frame_sink)
         if self._vs_cpu:
             self._run_steps(
@@ -1021,7 +1041,7 @@ class LocalSfiiiAdapter:
         frame_sink: FrameSink | None,
         *,
         tournament_won: bool,
-        show_continue: bool,
+        winner: str | None,
     ) -> dict[str, Any]:
         frames_per_second = 60 / self.config.step_ratio
         minimum_frames = round(
@@ -1031,16 +1051,17 @@ class LocalSfiiiAdapter:
         maximum_frames = round(_TERMINAL_MAX_SECONDS * frames_per_second)
         idle_frames_needed = round(_TERMINAL_IDLE_SECONDS * frames_per_second)
         black_frames_needed = max(1, round(0.25 * frames_per_second))
-        game_over_cue_frame = round(_GAME_OVER_CUE_SECONDS * frames_per_second)
         idle_frames = 0
         black_frames = 0
 
-        self._emit_presentation("continue" if show_continue else "winner")
+        if winner == "P1":
+            self._emit_presentation("winner")
+        elif winner == "P2":
+            self._emit_presentation("game_over")
+        self._emit_presentation("continue")
         for frame_number in range(maximum_frames):
             data = self._sub_step([])
             self._emit_frame(data, frame_sink)
-            if show_continue and frame_number == game_over_cue_frame:
-                self._emit_presentation("game_over")
             if frame_number < minimum_frames:
                 continue
 

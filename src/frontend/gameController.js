@@ -40,20 +40,17 @@ const audioScenes = {
     volume: 0.2,
     loop: false,
   },
-  modelLoading: {
-    soundName: SOUND_KEYS.MAIN_MENU,
-    volume: 0.2,
-    loop: true,
-  },
   win: {
     soundName: SOUND_KEYS.WIN,
     volume: 0.4,
     loop: false,
+    holdMs: 7000,
   },
   gameOver: {
     soundName: SOUND_KEYS.GAME_OVER,
     volume: 0.4,
     loop: false,
+    holdMs: 6000,
   },
   continue: {
     soundName: SOUND_KEYS.CONTINUE,
@@ -93,7 +90,40 @@ const createGameController = () => {
   let endFlow = "idle";
   let currentAudioOwner = null;
   let pendingFinishedState = null;
-  let pendingPresentations = [];
+  let queuedContinue = false;
+  let queuedGameOver = false;
+  let phaseHoldTimer = null;
+  const overlayStings = new Set(["win", "gameOver", "judgement"]);
+
+  const clearPhaseHold = () => {
+    if (phaseHoldTimer !== null) {
+      clearTimeout(phaseHoldTimer);
+      phaseHoldTimer = null;
+    }
+  };
+
+  const playQueuedEndMusic = () => {
+    if (queuedGameOver) {
+      queuedGameOver = false;
+      playAudioScene("gameOver");
+      return;
+    }
+    if (queuedContinue) {
+      queuedContinue = false;
+      playAudioScene("continue");
+      revealReplayIfReady();
+      return;
+    }
+    revealReplayIfReady();
+  };
+
+  const releasePhaseOwner = (owner, extra) => {
+    if (currentAudioOwner !== owner) return;
+    clearPhaseHold();
+    currentAudioOwner = null;
+    extra?.();
+    playQueuedEndMusic();
+  };
 
   const playAudioScene = (scene, options = {}) => {
     const spec = { ...audioScenes[scene], ...options };
@@ -105,42 +135,54 @@ const createGameController = () => {
       return true;
     }
 
+    clearPhaseHold();
     const owner = { scene, soundName: spec.soundName };
     currentAudioOwner = owner;
     const started = AudioManager.playPhase(spec.soundName, {
       volume: spec.volume,
       loop: spec.loop,
       onEnd: () => {
-        if (currentAudioOwner !== owner) return;
-        currentAudioOwner = null;
-        if (spec.onEnd) spec.onEnd();
+        releasePhaseOwner(owner, spec.onEnd);
       },
       onError: (error) => {
-        if (currentAudioOwner !== owner) return;
-        currentAudioOwner = null;
-        if (spec.onError) spec.onError(error);
+        releasePhaseOwner(owner, () => spec.onError?.(error));
       },
     });
     if (!started && currentAudioOwner === owner) {
       currentAudioOwner = null;
+      playQueuedEndMusic();
+      return started;
+    }
+    if (started && spec.holdMs) {
+      phaseHoldTimer = setTimeout(() => {
+        phaseHoldTimer = null;
+        releasePhaseOwner(owner);
+      }, spec.holdMs);
     }
     return started;
   };
 
   const stopAllAudio = () => {
+    clearPhaseHold();
     currentAudioOwner = null;
+    queuedContinue = false;
+    queuedGameOver = false;
     AudioManager.stopAll();
   };
 
-  const playGameplayMusic = (roundNumber = 1) => {
+  const playGameplayMusic = (event = {}) => {
+    queuedContinue = false;
+    queuedGameOver = false;
     const state = GameState.get();
+    const player1 = event.player1 ?? state.player1;
+    const player2 = event.player2 ?? state.player2;
     // CPU story stages use the opponent theme; other modes keep the human pick.
     const character = isCpuParticipant(state.player2Participant)
-      ? state.player2.character
+      ? player2.character
       : getHumanSeat(state) === "P2"
-        ? state.player2.character
-        : state.player1.character;
-    const soundName = gameplaySoundKey(character, roundNumber);
+        ? player2.character
+        : player1.character;
+    const soundName = gameplaySoundKey(character, event.round_number ?? 1);
     if (!soundName) return;
 
     playAudioScene("gameplay", {
@@ -151,19 +193,29 @@ const createGameController = () => {
   };
 
   const playLobbyMusic = () => {
+    queuedContinue = false;
+    queuedGameOver = false;
     playAudioScene("lobby");
   };
 
   const playSelectMusic = () => {
+    queuedContinue = false;
+    queuedGameOver = false;
     playAudioScene("select");
   };
 
-  const playModelLoadingMusic = () => {
-    playAudioScene("modelLoading");
-  };
-
-  const playVersus = () => {
-    playAudioScene("transition");
+  const revealReplayIfReady = () => {
+    if (!pendingFinishedState) return;
+    if (overlayStings.has(currentAudioOwner?.scene)) return;
+    if (queuedContinue) return;
+    if (queuedGameOver && currentAudioOwner?.scene !== "continue") {
+      queuedGameOver = false;
+      playAudioScene("gameOver");
+      return;
+    }
+    const finishedState = pendingFinishedState;
+    pendingFinishedState = null;
+    handleGameFinished(finishedState);
   };
 
   const setCanvasLoading = (visible, message = "STARTING GAME...") => {
@@ -205,8 +257,10 @@ const createGameController = () => {
     byId("help-overlay")?.classList.add("hidden");
     endFlow = "idle";
     pendingFinishedState = null;
-    pendingPresentations = [];
+    clearPhaseHold();
     currentAudioOwner = null;
+    queuedContinue = false;
+    queuedGameOver = false;
     AudioManager.stopTrack("phase");
 
     const gameConfig = {
@@ -273,7 +327,11 @@ const createGameController = () => {
 
   const handlePresentation = (data) => {
     if (data.name === "versus") {
-      playVersus();
+      playAudioScene("transition");
+      return;
+    }
+    if (data.name === "fight") {
+      playGameplayMusic(data);
       return;
     }
     if (data.name === "capcom") {
@@ -300,10 +358,18 @@ const createGameController = () => {
       return;
     }
     if (data.name === "continue") {
+      if (overlayStings.has(currentAudioOwner?.scene)) {
+        queuedContinue = true;
+        return;
+      }
       playAudioScene("continue");
       return;
     }
     if (data.name === "game_over") {
+      if (overlayStings.has(currentAudioOwner?.scene) || queuedContinue) {
+        queuedGameOver = true;
+        return;
+      }
       playAudioScene("gameOver");
       return;
     }
@@ -317,7 +383,7 @@ const createGameController = () => {
     if (message.type === "game_state") {
       handleGameState(message.data);
     } else if (message.type === "presentation") {
-      pendingPresentations.push(message.data);
+      handlePresentation(message.data);
     }
   };
 
@@ -383,7 +449,6 @@ const createGameController = () => {
     const frameReady =
       pendingVideoFrame ||
       typeof remoteVideo.requestVideoFrameCallback !== "function";
-    let frameRendered = false;
     if (
       frameReady &&
       canvas &&
@@ -397,17 +462,6 @@ const createGameController = () => {
       ctx.drawImage(remoteVideo, 0, 0, canvas.width, canvas.height);
       pendingVideoFrame = false;
       lastPresentationAt = performance.now();
-      frameRendered = true;
-    }
-    if (frameRendered && pendingPresentations.length > 0) {
-      const presentations = pendingPresentations;
-      pendingPresentations = [];
-      presentations.forEach(handlePresentation);
-    }
-    if (frameRendered && pendingFinishedState) {
-      const finishedState = pendingFinishedState;
-      pendingFinishedState = null;
-      handleGameFinished(finishedState);
     }
     if (typeof remoteVideo.requestVideoFrameCallback !== "function") {
       pendingVideoFrame = true;
@@ -431,7 +485,6 @@ const createGameController = () => {
     });
     endFlow = "idle";
     pendingFinishedState = null;
-    pendingPresentations = [];
     stopAllAudio();
     ScreenManager.showError(message);
   };
@@ -461,7 +514,7 @@ const createGameController = () => {
         break;
 
       case "pregame": {
-        const waitingForReplay = endFlow === "replay";
+        const waitingForReplay = endFlow === "ending" || endFlow === "replay";
         GameState.update({
           loaded: true,
           serverReady: true,
@@ -525,9 +578,6 @@ const createGameController = () => {
         setCanvasLoading(true, "Models cold-starting...");
         GamepadManager.setUIActive(true);
         GamepadUINavigator.updateGamepadSections(true);
-        if (currentAudioOwner?.scene !== "transition") {
-          playModelLoadingMusic();
-        }
         break;
 
       case "transitioning":
@@ -539,18 +589,6 @@ const createGameController = () => {
         setCanvasLoading(false);
         GamepadManager.setUIActive(true);
         GamepadUINavigator.updateGamepadSections(true);
-        if (
-          ![
-            "transition",
-            "modelLoading",
-            "gameplay",
-            "judgement",
-            "win",
-            "gillIntro",
-          ].includes(currentAudioOwner?.scene)
-        ) {
-          playModelLoadingMusic();
-        }
         break;
 
       case "running": {
@@ -573,8 +611,6 @@ const createGameController = () => {
               }
             : {}),
         });
-        const roundNumber = data.round_number ?? 1;
-        playGameplayMusic(roundNumber);
         setCanvasSize();
         setCanvasLoading(false);
         restartVideoRendering();
@@ -588,38 +624,23 @@ const createGameController = () => {
           acceptsInput: false,
           keyState: {},
         });
+        endFlow = "ending";
         pendingFinishedState = data;
+        revealReplayIfReady();
         break;
 
       case "error":
         GameState.update({ loaded: false, acceptsInput: false });
         endFlow = "idle";
         pendingFinishedState = null;
-        pendingPresentations = [];
         stopAllAudio();
         ScreenManager.showError(data.error || "Unknown game error");
         break;
     }
   };
 
-  const handleGameFinished = (data) => {
+  const handleGameFinished = () => {
     endFlow = "replay";
-    const result =
-      data.winner_side === "draw"
-        ? "DRAW"
-        : `${String(data.winner || "WINNER").toUpperCase()} WINS`;
-    setText("game-result", result);
-    const resultEl = byId("game-result");
-    if (resultEl) {
-      resultEl.classList.remove("text-sf-blue", "text-sf-red", "text-sf-green");
-      if (data.winner_side === "P1") {
-        resultEl.classList.add("text-sf-blue");
-      } else if (data.winner_side === "P2") {
-        resultEl.classList.add("text-sf-red");
-      } else {
-        resultEl.classList.add("text-sf-green");
-      }
-    }
     GameState.update({
       loaded: true,
       acceptsInput: false,
