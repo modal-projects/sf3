@@ -20,7 +20,12 @@ uvx pre-commit install
 modal setup
 ```
 
-Obtain a copy of SF3, then store it as `assets/engine/sfiii3n.zip`.
+Obtain a copy of SF3, then store it as `assets/engine/sfiii3n.zip`. Then, upload it to a Modal Volume for the deploy GH workflow:
+ 
+```bash
+modal volume create sf3-rom
+modal volume put sf3-rom assets/engine/sfiii3n.zip
+```
 
 Create accounts and get API keys for:
 

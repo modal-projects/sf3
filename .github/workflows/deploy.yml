@@ -25,5 +25,10 @@ jobs:
       - name: Sync dependencies
         run: uv sync
 
+      - name: Fetch SF3 ROM from Modal Volume
+        run: |
+          mkdir -p assets/engine
+          uv run modal volume get sf3-rom sfiii3n.zip assets/engine/sfiii3n.zip
+
       - name: Deploy sf3 to Modal
         run: uv run modal deploy -m src.app
