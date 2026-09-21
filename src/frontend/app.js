@@ -47,7 +47,9 @@ const initApp = async () => {
   GameController.init();
   UIController.init();
   GamepadUINavigator.init();
-  ScreenManager.showScreen(ScreenManager.screens.LOBBY);
+  if (GameState.getCurrentScreen() !== ScreenManager.screens.ERROR) {
+    ScreenManager.showScreen(ScreenManager.screens.LOBBY);
+  }
 
   window.addEventListener("beforeunload", () => {
     AudioManager.stopAll();

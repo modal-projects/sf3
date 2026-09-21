@@ -90,7 +90,7 @@ export const WebRtcManager = {
 
       this.peer.onconnectionstatechange = () => {
         const state = this.peer?.connectionState;
-        if (state === "failed" || state === "disconnected" || state === "closed") {
+        if (state === "failed" || state === "closed") {
           this.handleDisconnect("Game connection lost.");
         }
       };
@@ -138,14 +138,13 @@ export const WebRtcManager = {
           this.handleDisconnect("Connection Error");
         });
     };
-    this.ws.onclose = () => {
+    const onSignalingLost = (message) => () => {
       if (!this.peer || this.peer.connectionState !== "connected") {
-        this.handleDisconnect("Signaling connection lost.");
+        this.handleDisconnect(message);
       }
     };
-    this.ws.onerror = () => {
-      this.handleDisconnect("Connection Error");
-    };
+    this.ws.onclose = onSignalingLost("Signaling connection lost.");
+    this.ws.onerror = onSignalingLost("Connection Error");
 
     await new Promise((resolve, reject) => {
       const ws = this.ws;

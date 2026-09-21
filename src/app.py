@@ -42,6 +42,7 @@ for model in MODELS.values():
 
 CONTROL_MESSAGE_QUEUE_LIMIT = 128
 SESSION_TASK_SHUTDOWN_TIMEOUT_SECONDS = 1.0
+ENV_INIT_TIMEOUT_SECONDS = 1 * MINUTES
 
 
 local_assets_dir = Path(__file__).parent.parent / "assets"
@@ -135,12 +136,11 @@ class Web:
 
             boot_task = asyncio.create_task(boot())
             self.participant_boot_tasks[participant] = boot_task
+            boot_task.add_done_callback(
+                lambda _: self.participant_boot_tasks.pop(participant, None)
+            )
 
-        try:
-            return await boot_task
-        finally:
-            if boot_task.done():
-                self.participant_boot_tasks.pop(participant, None)
+        return await asyncio.shield(boot_task)
 
     @modal.asgi_app(label="gameplay")
     def app(self):
@@ -603,9 +603,9 @@ class Web:
             async def cleanup(self):
                 await self.cleanup_environment()
                 if self.cleanup_tasks:
-                    await asyncio.gather(
-                        *tuple(self.cleanup_tasks),
-                        return_exceptions=True,
+                    await asyncio.wait(
+                        tuple(self.cleanup_tasks),
+                        timeout=ENV_INIT_TIMEOUT_SECONDS,
                     )
 
         # routes
@@ -636,7 +636,8 @@ class Web:
             @pc.on("connectionstatechange")
             async def on_connectionstatechange():
                 state = pc.connectionState
-                if state in {"closed", "failed", "disconnected"}:
+                if state in {"closed", "failed"} and not session.stop_event.is_set():
+                    print(f"Stopping session: peer connection {state}")
                     session.request_stop()
 
             @pc.on("icecandidate")
@@ -775,7 +776,14 @@ class Web:
                             await websocket.send_json(build_turn_servers())
                             continue
                 except WebSocketDisconnect:
-                    session.request_stop()
+                    if pc.connectionState == "connected":
+                        await session.stop_event.wait()
+                    else:
+                        print(
+                            "Stopping session: signaling websocket disconnected "
+                            f"while peer connection {pc.connectionState}"
+                        )
+                        session.request_stop()
                 except Exception:
                     print(f"Error in signaling processor: {traceback.format_exc()}")
                     session.request_stop()
@@ -1098,7 +1106,7 @@ class Web:
                 try:
                     env = await asyncio.wait_for(
                         asyncio.shield(environment_task),
-                        timeout=1 * MINUTES,
+                        timeout=ENV_INIT_TIMEOUT_SECONDS,
                     )
                 except asyncio.CancelledError:
                     schedule_abandoned_cleanup()
@@ -1194,6 +1202,8 @@ class Web:
                                     pregame_frame_sink,
                                 )
                             except Exception as e:
+                                if session.stop_event.is_set():
+                                    break
                                 print(f"Error during pregame step: {e}")
                                 await fail_current_game(format_runtime_error(e))
                                 session.request_stop()
@@ -1290,6 +1300,8 @@ class Web:
                                     stream_phase_frame,
                                 )
                             except Exception as e:
+                                if session.stop_event.is_set():
+                                    break
                                 print(f"Error during env.step: {e}")
                                 await fail_current_game(format_runtime_error(e))
                                 break

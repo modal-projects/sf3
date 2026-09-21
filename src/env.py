@@ -334,19 +334,27 @@ class LocalSfiiiAdapter:
             "characterSelectColorP2": Address("0x02015684", "u8"),
         }
 
-        self.emu = Emulator(
-            config.resolved_env_id(),
-            config.roms_path,
-            "sfiii3n",
-            self.memory_addresses,
-            frame_ratio=config.step_ratio,
-            render=config.render_mode == "human",
-            throttle=False,
-            frame_skip=0,
-            sound=False,
-            debug=False,
-            binary_path=None,
-        )
+        self.emu = Emulator.__new__(Emulator)
+        try:
+            Emulator.__init__(
+                self.emu,
+                config.resolved_env_id(),
+                config.roms_path,
+                "sfiii3n",
+                self.memory_addresses,
+                frame_ratio=config.step_ratio,
+                render=config.render_mode == "human",
+                throttle=False,
+                frame_skip=0,
+                sound=False,
+                debug=False,
+                binary_path=None,
+            )
+        except BaseException:
+            console = getattr(self.emu, "console", None)
+            if console is not None:
+                console.process.kill()
+            raise
         self._data: dict[str, Any] = {}
         self.expected_health = {"P1": 0, "P2": 0}
         self.expected_wins = {"P1": 0, "P2": 0}

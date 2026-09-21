@@ -58,6 +58,7 @@ const createInputController = () => {
   let specialMoves = {};
   let gamepadWasSelecting = false;
   let gamepadSelectionConfirmPressed = false;
+  let gamepadHeldAttack = actions.NO_MOVE;
 
   const getActionFromKeys = () => {
     const state = GameState.get();
@@ -165,26 +166,35 @@ const createInputController = () => {
           HP: currentState.buttons[5],
         };
 
-    let action = actions.NO_MOVE;
+    let attack = actions.NO_MOVE;
 
     if (attacks.LP && attacks.LK) {
-      action = actions.LOW_PUNCH_LOW_KICK;
+      attack = actions.LOW_PUNCH_LOW_KICK;
     } else if (attacks.MP && attacks.MK) {
-      action = actions.MEDIUM_PUNCH_MEDIUM_KICK;
+      attack = actions.MEDIUM_PUNCH_MEDIUM_KICK;
     } else if (attacks.HP && attacks.HK) {
-      action = actions.HIGH_PUNCH_HIGH_KICK;
+      attack = actions.HIGH_PUNCH_HIGH_KICK;
     } else if (attacks.HP) {
-      action = actions.HIGH_PUNCH;
+      attack = actions.HIGH_PUNCH;
     } else if (attacks.MP) {
-      action = actions.MEDIUM_PUNCH;
+      attack = actions.MEDIUM_PUNCH;
     } else if (attacks.LP) {
-      action = actions.LOW_PUNCH;
+      attack = actions.LOW_PUNCH;
     } else if (attacks.HK) {
-      action = actions.HIGH_KICK;
+      attack = actions.HIGH_KICK;
     } else if (attacks.MK) {
-      action = actions.MEDIUM_KICK;
+      attack = actions.MEDIUM_KICK;
     } else if (attacks.LK) {
-      action = actions.LOW_KICK;
+      attack = actions.LOW_KICK;
+    }
+    const attackPressed =
+      attack !== actions.NO_MOVE && attack !== gamepadHeldAttack;
+    gamepadHeldAttack = attack;
+
+    let action = actions.NO_MOVE;
+
+    if (attackPressed) {
+      action = attack;
     } else if (isDiagonal) {
       if (directions.left && directions.up) {
         action = actions.LEFT_UP;
@@ -236,9 +246,18 @@ const createInputController = () => {
     specialMoves = extraSpecialMoves;
   };
 
+  const releaseAllKeys = () => {
+    GameState.update({ keyState: {} });
+    handleActionFromInput(actions.NO_MOVE);
+  };
+
   const init = () => {
     document.addEventListener("keydown", (e) => handleKeyboardEvent(e, true));
     document.addEventListener("keyup", (e) => handleKeyboardEvent(e, false));
+    window.addEventListener("blur", releaseAllKeys);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) releaseAllKeys();
+    });
   };
 
   const initGamepadInput = () => {
