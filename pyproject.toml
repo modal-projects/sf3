@@ -5,7 +5,7 @@ description = ""
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "modal==1.5.2",
+    "modal==1.5.5",
     "modal-training-gym",
 ]
 

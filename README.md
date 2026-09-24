@@ -31,14 +31,12 @@ Create accounts and get API keys for:
 
 - [Open Relay TURN server](https://dashboard.metered.ca/login?tool=turnserver)
 - [HuggingFace](https://huggingface.co/settings/tokens)
-- [Weights and Biases](https://wandb.ai/authorize)
 
 Then, store then as Modal Secrets:
 
 ```bash
 modal secret create turn-credentials TURN_USERNAME=<...> TURN_CREDENTIAL=<...>
 modal secret create huggingface-secret HF_TOKEN=your-key
-modal secret create wandb-secret WANDB_API_KEY=your-key
 ```
 
 ### Commands
@@ -48,11 +46,11 @@ Prepend web app commands with `SF3_WARM_MODELS=1` to avoid cold-starts.
 ```bash
 # evaluate llms +/- cpu on every character matchup
 modal run --detach -m src.eval.main --base
-modal run --detach -m src.eval.main --ckpt-path /checkpoints/.../r0_hf
+modal run --detach -m src.eval.main --ckpt-path /checkpoints/.../iter_0000010_hf
 modal run --detach -m src.eval.main  # latest checkpoint
 
-# multi-round rl post-training
-modal run --detach -m src.train.main
+# rl post-training
+python -m src.train.main
 
 # test the trained model's latency
 modal run -m src.serve.qwen3_vl_8b
