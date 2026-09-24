@@ -2,12 +2,11 @@ import asyncio
 import mimetypes
 import os
 import queue
+import threading
 import time
 from collections import deque
-from contextlib import asynccontextmanager
 from fractions import Fraction
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 import modal
 
@@ -43,6 +42,11 @@ for model in MODELS.values():
 CONTROL_MESSAGE_QUEUE_LIMIT = 128
 SESSION_TASK_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 ENV_INIT_TIMEOUT_SECONDS = 1 * MINUTES
+GAMEPLAY_PORT = 8000
+GAMEPLAY_STARTUP_TIMEOUT_SECONDS = 5 * MINUTES
+# How long a player can be fully disconnected (tab closed, network flip) before
+# their session, and the emulator container affinity that comes with it, is released.
+GAMEPLAY_SESSION_IDLE_TIMEOUT_SECONDS = 10 * MINUTES
 
 
 local_assets_dir = Path(__file__).parent.parent / "assets"
@@ -52,63 +56,72 @@ remote_icons_dir = "/root/icons"
 remote_logos_dir = "/root/logos"
 remote_sounds_dir = "/root/sounds"
 
-static_image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .uv_pip_install(
-        "fastapi[standard]==0.116.1",
+launcher_image = modal.Image.debian_slim(python_version="3.12").uv_pip_install(
+    "fastapi[standard]==0.116.1",
+)
+
+gameplay_image = (
+    create_gameplay_image(
+        extra_python_packages=(
+            "aiortc",
+            "av",
+            "fastapi[standard]==0.116.1",
+            "websockets==15.0.1",
+        )
     )
     .add_local_dir(Path(__file__).parent / "frontend", remote_frontend_dir)
-    .add_local_dir(
-        local_assets_dir / "icons",
-        remote_icons_dir,
-    )
-    .add_local_dir(
-        local_assets_dir / "logos",
-        remote_logos_dir,
-    )
-    .add_local_dir(
-        local_assets_dir / "sounds",
-        remote_sounds_dir,
-    )
-)
-
-gameplay_image = create_gameplay_image(
-    extra_python_packages=(
-        "aiortc",
-        "av",
-        "fastapi[standard]==0.116.1",
-        "websockets==15.0.1",
-    )
+    .add_local_dir(local_assets_dir / "icons", remote_icons_dir)
+    .add_local_dir(local_assets_dir / "logos", remote_logos_dir)
+    .add_local_dir(local_assets_dir / "sounds", remote_sounds_dir)
 )
 
 
-@app.cls(
+# One sessioned server hosts both the frontend and the gameplay backend so that the
+# page, the `/ws/{peer_id}` signaling socket and `/api/*` are same-origin and all
+# carry the session cookie that pins the browser to the container running its emulator.
+# `max_concurrency` is the number of live sessions a container will accept.
+@app.server(
     image=gameplay_image,
-    region=CONTAINER_REGION,
+    compute_region=CONTAINER_REGION,
     routing_region=ROUTING_REGION,
     min_containers=1,
+    max_concurrency=3,
+    target_concurrency=2,
     secrets=[modal.Secret.from_name("turn-credentials")],
-    timeout=24 * 60 * MINUTES,
+    port=GAMEPLAY_PORT,
+    startup_timeout=GAMEPLAY_STARTUP_TIMEOUT_SECONDS,
 )
-@modal.concurrent(
-    max_inputs=3,
-    target_inputs=2,
-)
+@modal.sessioned()
 class Web:
     @modal.enter()
     def enter(
         self,
     ):
+        import uvicorn
+
         self.participant_servers = {}
         self.participant_boot_tasks = {}
-        if os.environ.get("SF3_WARM_MODELS") != "1":
-            return
-        for participant, model in MODELS.items():
-            try:
-                model.server().update_autoscaler(min_containers=1)
-            except Exception as exc:
-                label = PARTICIPANT_LABELS.get(participant, participant)
-                print(f"Could not keep {label} warm: {exc!r}")
+        if os.environ.get("SF3_WARM_MODELS") == "1":
+            for participant, model in MODELS.items():
+                try:
+                    model.server().update_autoscaler(min_containers=1)
+                except Exception as exc:
+                    label = PARTICIPANT_LABELS.get(participant, participant)
+                    print(f"Could not keep {label} warm: {exc!r}")
+
+        self.http_server = uvicorn.Server(
+            uvicorn.Config(
+                self.build_app(),
+                host="0.0.0.0",
+                port=GAMEPLAY_PORT,
+                log_level="warning",
+            )
+        )
+        threading.Thread(target=self.http_server.run, daemon=True).start()
+
+    @modal.exit()
+    def exit(self):
+        self.http_server.should_exit = True
 
     async def create_participant_server(self, participant: str):
         model = MODELS.get(participant)
@@ -142,8 +155,7 @@ class Web:
 
         return await asyncio.shield(boot_task)
 
-    @modal.asgi_app(label="gameplay")
-    def app(self):
+    def build_app(self):
         import json
         import traceback
 
@@ -158,18 +170,12 @@ class Web:
         from aiortc.sdp import candidate_from_sdp
         from av import VideoFrame
         from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-        from fastapi.middleware.cors import CORSMiddleware
         from fastapi.middleware.gzip import GZipMiddleware
-        from fastapi.responses import JSONResponse
+        from fastapi.responses import FileResponse, JSONResponse, Response
+        from fastapi.staticfiles import StaticFiles
         from starlette.websockets import WebSocketState
 
         web_app = FastAPI()
-        web_app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
         web_app.add_middleware(GZipMiddleware, minimum_size=1024)
 
         # helper fns
@@ -1498,158 +1504,80 @@ class Web:
                 headers={"Cache-Control": "public, max-age=300"},
             )
 
+        # frontend
+
+        no_cache_header = "no-store, max-age=0"
+        no_cache_suffixes = (".html", ".js", ".css")
+        frontend_root = Path(remote_frontend_dir).resolve()
+
+        @web_app.get("/favicon.ico")
+        async def favicon():
+            return FileResponse(
+                f"{remote_logos_dir}/mobile.webp",
+                media_type="image/webp",
+            )
+
+        web_app.mount("/icons", StaticFiles(directory=remote_icons_dir), name="icons")
+        web_app.mount("/logos", StaticFiles(directory=remote_logos_dir), name="logos")
+        web_app.mount(
+            "/sounds", StaticFiles(directory=remote_sounds_dir), name="sounds"
+        )
+
+        def frontend_file_response(frontend_path: str):
+            path = (frontend_root / frontend_path).resolve()
+            if not path.is_relative_to(frontend_root):
+                return Response(status_code=404)
+            if not path.is_file():
+                return Response(status_code=404)
+            cache_header = (
+                no_cache_header
+                if path.suffix.lower() in no_cache_suffixes
+                else "public, max-age=31536000, immutable"
+            )
+            return FileResponse(path, headers={"Cache-Control": cache_header})
+
+        @web_app.get("/")
+        async def index():
+            return frontend_file_response("index.html")
+
+        @web_app.get("/{frontend_path:path}")
+        async def frontend_file(frontend_path: str):
+            return frontend_file_response(frontend_path)
+
         return web_app
 
 
-_deployed_gameplay_base_url: str | None = None
-
-
-def _warm_deployed_gameplay_base_url() -> str:
-    global _deployed_gameplay_base_url
-    if _deployed_gameplay_base_url is not None:
-        return _deployed_gameplay_base_url
-
-    try:
-        web_server_cls = modal.Cls.from_name("sf3", "Web")()
-        url = web_server_cls.app.get_web_url()
-        if url:
-            _deployed_gameplay_base_url = url.rstrip("/")
-            return _deployed_gameplay_base_url
-    except Exception as exc:
-        print(f"resolve_gameplay_base_url: deployed lookup: {exc}")
-
-    return ""
-
-
-def resolve_gameplay_base_url(
-    static_base_url: str,
-    *,
-    deployed_base_url: str | None = None,
-) -> str:
-    static_base_url = static_base_url.rstrip("/")
-    if static_base_url:
-        try:
-            parsed = urlsplit(static_base_url)
-            netloc = parsed.netloc
-            for static_suffix, gameplay_suffix in (
-                ("--sf3-dev.modal.run", f"--gameplay-dev.{ROUTING_REGION}.modal.run"),
-                ("--sf3.modal.run", f"--gameplay.{ROUTING_REGION}.modal.run"),
-            ):
-                if netloc.endswith(static_suffix):
-                    return urlunsplit(
-                        (
-                            parsed.scheme,
-                            netloc[: -len(static_suffix)] + gameplay_suffix,
-                            "",
-                            "",
-                            "",
-                        )
-                    )
-        except ValueError:
-            pass
-
-    if deployed_base_url is not None:
-        return deployed_base_url
-
-    return _deployed_gameplay_base_url or ""
-
-
+# Public entrypoint: starts a gameplay session on `Web` and hands the browser off to
+# it. The token travels once as a query parameter; Modal's proxy swaps it for a
+# `__Host-modal-server-session` cookie and redirects to `/`, after which every
+# request from the page (assets, `/api/*`, the signaling websocket) reaches the same
+# container until the session has been idle for the configured timeout.
 @app.function(
-    image=static_image,
+    image=launcher_image,
     region=CONTAINER_REGION,
     min_containers=1,
-    timeout=24 * 60 * MINUTES,
 )
 @modal.concurrent(max_inputs=96, target_inputs=64)
 @modal.asgi_app(label="sf3", custom_domains=["sf3.modal.dev"])
-def static_site():
-    import json
+def launcher():
+    from urllib.parse import urlencode
 
-    from fastapi import FastAPI, Request, WebSocket
-    from fastapi.responses import FileResponse, Response
-    from fastapi.staticfiles import StaticFiles
+    from fastapi import FastAPI
+    from fastapi.responses import RedirectResponse
 
-    @asynccontextmanager
-    async def lifespan(web_app: FastAPI):
-        web_app.state.deployed_gameplay_base_url = await asyncio.to_thread(
-            _warm_deployed_gameplay_base_url
-        )
-        yield
-
-    web_app = FastAPI(lifespan=lifespan)
-    no_cache_header = "no-store, max-age=0"
-    no_cache_suffixes = (".html", ".js", ".css")
-    frontend_root = Path(remote_frontend_dir).resolve()
-
-    def is_no_cache_path(path: str) -> bool:
-        return (
-            path == "/"
-            or path == "/runtime-config.js"
-            or path.endswith(no_cache_suffixes)
-        )
-
-    @web_app.middleware("http")
-    async def add_static_cache_headers(request: Request, call_next):
-        response = await call_next(request)
-        if is_no_cache_path(request.url.path):
-            response.headers["Cache-Control"] = no_cache_header
-        return response
-
-    @web_app.get("/runtime-config.js")
-    async def runtime_config(request: Request):
-        gameplay_base_url = resolve_gameplay_base_url(
-            str(request.base_url),
-            deployed_base_url=request.app.state.deployed_gameplay_base_url or "",
-        )
-        body = (
-            "window.__SF3_CONFIG__ = "
-            + json.dumps({"gameplayBaseUrl": gameplay_base_url})
-            + ";"
-        )
-        return Response(
-            body,
-            media_type="application/javascript",
-            headers={"Cache-Control": no_cache_header},
-        )
-
-    @web_app.websocket("/ws")
-    async def wrong_websocket_host(websocket: WebSocket):
-        await websocket.close(code=1013, reason="Connect to gameplay host")
-
-    @web_app.websocket("/ws/{path:path}")
-    async def wrong_websocket_host_path(websocket: WebSocket, path: str):
-        await websocket.close(code=1013, reason="Connect to gameplay host")
-
-    @web_app.get("/favicon.ico")
-    async def favicon():
-        return FileResponse(
-            f"{remote_logos_dir}/mobile.webp",
-            media_type="image/webp",
-        )
-
-    web_app.mount("/icons", StaticFiles(directory=remote_icons_dir), name="icons")
-    web_app.mount("/logos", StaticFiles(directory=remote_logos_dir), name="logos")
-    web_app.mount("/sounds", StaticFiles(directory=remote_sounds_dir), name="sounds")
-
-    def frontend_file_response(frontend_path: str):
-        path = (frontend_root / frontend_path).resolve()
-        if not path.is_relative_to(frontend_root):
-            return Response(status_code=404)
-        if not path.is_file():
-            return Response(status_code=404)
-        cache_header = (
-            no_cache_header
-            if path.suffix.lower() in no_cache_suffixes
-            else "public, max-age=31536000, immutable"
-        )
-        return FileResponse(path, headers={"Cache-Control": cache_header})
+    web_app = FastAPI()
 
     @web_app.get("/")
-    async def index():
-        return frontend_file_response("index.html")
-
-    @web_app.get("/{frontend_path:path}")
-    async def frontend_file(frontend_path: str):
-        return frontend_file_response(frontend_path)
+    async def start_session():
+        session = await Web.sessions.start.aio(
+            idle_timeout=GAMEPLAY_SESSION_IDLE_TIMEOUT_SECONDS
+        )
+        gameplay_url = (await Web.get_url.aio()).rstrip("/")
+        query = urlencode({"modal_session_token": session.token})
+        return RedirectResponse(
+            f"{gameplay_url}/?{query}",
+            status_code=303,
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
 
     return web_app
