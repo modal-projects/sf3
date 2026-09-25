@@ -1503,8 +1503,8 @@ SPECIAL_MOVES = {
 
 
 CLOSE_IN_MOVES = {
-    "Move Closer": create_move_dict([MOVES["Right"]] * 4),
-    "Jump Closer": create_move_dict([MOVES["Right+Up"]] * 4),
+    "Move Closer": create_move_dict([MOVES["Left"]] * 4),
+    "Jump Closer": create_move_dict([MOVES["Left+Up"]] * 4),
 }
 
 BASE_META_INSTRUCTIONS = {
@@ -1633,9 +1633,7 @@ def create_messages(
         player2.character, player2.super_art, player2.super_count
     )
     if recent_moves is not None:
-        # encourage close-in moves to avoid spamming + distancing
-        filtered_recent_moves = list(set(recent_moves) - set(CLOSE_IN_MOVES.keys()))
-        available_moves = [m for m in available_moves if m not in filtered_recent_moves]
+        available_moves = [m for m in available_moves if m not in recent_moves]
         if not available_moves:
             available_moves = list(CLOSE_IN_MOVES.keys())
     moves_prompt = "You may only use the following moves:\n"
@@ -1646,12 +1644,22 @@ def create_messages(
             "role": "system",
             "content": dedent(
                 f"""
-                You are the most aggressive Street Fighter III 3rd strike player in the world.
+                You are playing Street Fighter III 3rd strike.
+                It's best of 3: you've won {
+                    player2.wins
+                } rounds, and your opponent has won {player1.wins} rounds.
+                Your character is {
+                    player2.character
+                }, and your opponent's character is {player1.character}.
 
-                Your character: {player2.character}, opponent character: {player1.character}, first to 2 rounds: you've won {player2.wins} rounds, opponent has won {player1.wins} rounds
+                You are on the {
+                    "left side of the screen, facing right"
+                    if player2.side
+                    else "right side of the screen, facing left"
+                }
                 {moves_prompt}
 
-                Simply respond with ONLY the EXACT name of the best move without any surrounding formatting or additional text.
+                Only respond with the printed name of your next move.
                 """
             ),
         },
