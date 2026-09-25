@@ -1,6 +1,5 @@
-import { gameplayWebSocketUrl } from "./runtimeConfig.js";
-
 const iceServerTimeoutMs = 3000;
+const gameIdStorageKey = "sf3-game-id";
 const fallbackIceServers = [{ urls: "stun:stun.l.google.com:19302" }];
 
 export const WebRtcManager = {
@@ -10,7 +9,7 @@ export const WebRtcManager = {
   onMessage: null,
   onRemoteStream: null,
   onDisconnect: null,
-  peerId: "",
+  gameId: "",
   turnResolver: null,
   hasStarted: false,
   pendingMessages: [],
@@ -53,7 +52,7 @@ export const WebRtcManager = {
 
   async connect() {
     try {
-      this.peerId = this.generateShortId();
+      this.gameId = this.getGameId();
       await this.openSignalingSocket();
       const iceServers = await this.getIceServers();
       this.peer = new RTCPeerConnection({ iceServers });
@@ -70,7 +69,6 @@ export const WebRtcManager = {
             sdpMid: event.candidate.sdpMid,
             sdpMLineIndex: event.candidate.sdpMLineIndex,
           },
-          peer_id: this.peerId,
         });
       };
 
@@ -117,7 +115,6 @@ export const WebRtcManager = {
       this.sendSignal({
         type: offer.type,
         sdp: offer.sdp || "",
-        peer_id: this.peerId,
       });
     } catch (error) {
       console.error("WebRTC connect error", error);
@@ -127,8 +124,9 @@ export const WebRtcManager = {
   },
 
   async openSignalingSocket() {
-    const wsUrl = `${gameplayWebSocketUrl()}/${this.peerId}`;
-    this.ws = new WebSocket(wsUrl);
+    const wsUrl = new URL(`/ws/${this.gameId}`, window.location.href);
+    wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+    this.ws = new WebSocket(wsUrl.toString());
 
     this.ws.onmessage = (event) => {
       this.signalingChain = this.signalingChain
@@ -155,15 +153,23 @@ export const WebRtcManager = {
 
       const onOpen = () => {
         ws.removeEventListener("error", onError);
+        ws.removeEventListener("close", onClose);
         resolve();
       };
       const onError = () => {
         ws.removeEventListener("open", onOpen);
+        ws.removeEventListener("close", onClose);
         reject(new Error("signaling websocket error"));
+      };
+      const onClose = () => {
+        ws.removeEventListener("open", onOpen);
+        ws.removeEventListener("error", onError);
+        reject(new Error("signaling websocket closed"));
       };
 
       ws.addEventListener("open", onOpen, { once: true });
       ws.addEventListener("error", onError, { once: true });
+      ws.addEventListener("close", onClose, { once: true });
     });
   },
 
@@ -175,7 +181,7 @@ export const WebRtcManager = {
     const iceServerPromise = new Promise((resolve) => {
       this.turnResolver = resolve;
     });
-    this.sendSignal({ type: "get_turn_servers", peer_id: this.peerId });
+    this.sendSignal({ type: "get_turn_servers" });
 
     try {
       return await Promise.race([
@@ -307,13 +313,15 @@ export const WebRtcManager = {
     this.pendingDisconnect = message;
   },
 
-  generateShortId() {
-    const chars =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let result = "";
-    for (let i = 0; i < 22; i += 1) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
+  hasStoredGameId() {
+    return window.sessionStorage.getItem(gameIdStorageKey) !== null;
+  },
+
+  getGameId() {
+    const stored = window.sessionStorage.getItem(gameIdStorageKey);
+    if (stored !== null) return stored;
+    const gameId = crypto.randomUUID();
+    window.sessionStorage.setItem(gameIdStorageKey, gameId);
+    return gameId;
   },
 };

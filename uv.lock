@@ -10,6 +10,9 @@ resolution-markers = [
     "python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
+[manifest]
+overrides = [{ name = "modal", specifier = "==1.5.6.dev27" }]
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.6.1"
@@ -585,7 +588,7 @@ wheels = [
 
 [[package]]
 name = "modal"
-version = "1.5.5"
+version = "1.5.6.dev27"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -603,9 +606,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "watchfiles" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b9/a5/9e322043716e511b7f6c9120804f33b92e21a818bf4709b2d98b3c76d665/modal-1.5.5.tar.gz", hash = "sha256:30df363ed1898cc3d91a09ff3f95c38ab043f6b6294011b01085312c6a0ac777", size = 870356, upload-time = "2026-08-28T19:51:34.881Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/88/59/21e2a9ca3a06f32af418d84ae564445e4a316da68edda403eab0edbc616c/modal-1.5.6.dev27.tar.gz", hash = "sha256:3ec186162e4f0defb31c27ec2d0139f4dd5f5ee56da8f658e91c9622f1035a2e", size = 927176, upload-time = "2026-09-25T00:55:54.6Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/04/19/b3dca8baec119126058b12ca620e44022e4d08a091956668bd04180c89a7/modal-1.5.5-py3-none-any.whl", hash = "sha256:8d10d3ee09818aaba1973b73ce2521ab8961b63a29b5b52e3ff0d25e7a74808e", size = 985163, upload-time = "2026-08-28T19:51:32.404Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/6c/9cba4321c93ee6fc5b8ca5da0b80b87c37baa8f633bf7f0158836510b572/modal-1.5.6.dev27-py3-none-any.whl", hash = "sha256:572962b88ff92ae6cea46534744149a068153806d60dfa36885063d6b30bb0ad", size = 1047483, upload-time = "2026-09-25T00:55:52.542Z" },
 ]
 
 [[package]]
@@ -1241,7 +1244,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "modal", specifier = "==1.5.5" },
+    { name = "modal", specifier = "==1.5.6.dev27" },
     { name = "modal-training-gym", git = "https://github.com/modal-projects/training-gym.git?branch=main" },
 ]
 

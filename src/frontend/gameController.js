@@ -506,11 +506,25 @@ const createGameController = () => {
   };
 
   const handleGameState = (data) => {
-    GameState.update({ gamePhase: data.status });
+    const participantsAreAuthoritative = !["initializing", "pregame"].includes(
+      data.status
+    );
+    GameState.update({
+      gamePhase: data.status,
+      ...(participantsAreAuthoritative
+        ? {
+            player1Participant: data.player1_participant,
+            player2Participant: data.player2_participant,
+          }
+        : {}),
+    });
     switch (data.status) {
       case "initializing":
         setText("loading-status", "Starting game...");
         playLobbyMusic();
+        if (GameState.getCurrentScreen() === null) {
+          ScreenManager.showScreen(ScreenManager.screens.LOBBY);
+        }
         break;
 
       case "pregame": {
@@ -581,14 +595,8 @@ const createGameController = () => {
         break;
 
       case "transitioning":
-        GameState.update({
-          loaded: true,
-          acceptsInput: false,
-          keyState: {},
-        });
         setCanvasLoading(false);
-        GamepadManager.setUIActive(true);
-        GamepadUINavigator.updateGamepadSections(true);
+        enterLiveShell({ acceptsInput: false, uiActive: true });
         break;
 
       case "running": {
@@ -621,9 +629,13 @@ const createGameController = () => {
 
       case "finished":
         GameState.update({
+          loaded: true,
           acceptsInput: false,
           keyState: {},
         });
+        ScreenManager.showScreen(ScreenManager.screens.GAME);
+        setCanvasSize();
+        restartVideoRendering();
         endFlow = "ending";
         pendingFinishedState = data;
         revealReplayIfReady();

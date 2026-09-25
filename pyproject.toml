@@ -5,9 +5,12 @@ description = ""
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "modal==1.5.5",
+    "modal==1.5.6.dev27",
     "modal-training-gym",
 ]
+
+[tool.uv]
+override-dependencies = ["modal==1.5.6.dev27"]
 
 [tool.uv.sources]
 modal-training-gym = { git = "https://github.com/modal-projects/training-gym.git", branch = "main" }
