@@ -1,5 +1,7 @@
 const iceServerTimeoutMs = 3000;
 const gameIdStorageKey = "sf3-game-id";
+const gameIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const fallbackIceServers = [{ urls: "stun:stun.l.google.com:19302" }];
 
 export const WebRtcManager = {
@@ -313,15 +315,38 @@ export const WebRtcManager = {
     this.pendingDisconnect = message;
   },
 
+  readStoredGameId() {
+    const stored = window.sessionStorage.getItem(gameIdStorageKey);
+    if (stored === null) return null;
+    if (gameIdPattern.test(stored)) return stored;
+    window.sessionStorage.removeItem(gameIdStorageKey);
+    return null;
+  },
+
   hasStoredGameId() {
-    return window.sessionStorage.getItem(gameIdStorageKey) !== null;
+    return this.readStoredGameId() !== null;
   },
 
   getGameId() {
-    const stored = window.sessionStorage.getItem(gameIdStorageKey);
+    const stored = this.readStoredGameId();
     if (stored !== null) return stored;
     const gameId = crypto.randomUUID();
     window.sessionStorage.setItem(gameIdStorageKey, gameId);
     return gameId;
+  },
+
+  clearStoredGameId() {
+    window.sessionStorage.removeItem(gameIdStorageKey);
+  },
+
+  async getLauncherUrl() {
+    try {
+      const response = await fetch("/api/launcher-url", { cache: "no-store" });
+      if (!response.ok) return null;
+      const { url } = await response.json();
+      return typeof url === "string" && url ? url : null;
+    } catch {
+      return null;
+    }
   },
 };

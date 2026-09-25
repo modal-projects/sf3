@@ -602,6 +602,9 @@ const createGameController = () => {
       case "running": {
         const state = GameState.get();
         const identity = data.match_identity;
+        const resumedMatch =
+          currentAudioOwner?.scene !== "gameplay" &&
+          !overlayStings.has(currentAudioOwner?.scene);
         if (state.currentScreen !== ScreenManager.screens.GAME) {
           ScreenManager.showScreen(ScreenManager.screens.GAME);
         }
@@ -622,6 +625,13 @@ const createGameController = () => {
         setCanvasSize();
         setCanvasLoading(false);
         restartVideoRendering();
+        if (resumedMatch && identity) {
+          playGameplayMusic({
+            player1: identity.player1,
+            player2: identity.player2,
+            round_number: data.round_number,
+          });
+        }
         GamepadManager.setUIActive(!hasHumanParticipant(state));
         GamepadUINavigator.updateGamepadSections(true);
         break;
@@ -722,9 +732,15 @@ const createGameController = () => {
 
     const errorBackBtn = byId("error-back-btn");
     if (errorBackBtn) {
-      errorBackBtn.addEventListener("click", () => {
+      errorBackBtn.addEventListener("click", async () => {
         AudioManager.playSound(SOUND_KEYS.CLICK);
-        window.location.reload();
+        WebRtcManager.clearStoredGameId();
+        const launcherUrl = await WebRtcManager.getLauncherUrl();
+        if (launcherUrl) {
+          window.location.assign(launcherUrl);
+        } else {
+          window.location.reload();
+        }
       });
     }
     playLobbyMusic();

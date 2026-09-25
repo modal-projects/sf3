@@ -1595,6 +1595,13 @@ class Web:
         no_cache_suffixes = (".html", ".js", ".css")
         frontend_root = Path(remote_frontend_dir).resolve()
 
+        @web_app.get("/api/launcher-url")
+        async def launcher_url():
+            return JSONResponse(
+                {"url": await launcher.get_web_url.aio()},
+                headers={"Cache-Control": no_cache_header},
+            )
+
         @web_app.get("/favicon.ico")
         async def favicon():
             return FileResponse(
