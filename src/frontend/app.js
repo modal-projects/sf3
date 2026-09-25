@@ -8,7 +8,7 @@ import { UIController } from "./uiController.js";
 import { GamepadManager } from "./gamepadManager.js";
 import { GamepadUINavigator } from "./gamepadUINavigator.js";
 import { WebRtcManager } from "./webRtcManager.js";
-import { byId } from "./utils.js";
+import { byId, setText } from "./utils.js";
 import { GAME_SOURCE_SIZE } from "./constants.js";
 
 export const setCanvasSize = () => {
@@ -22,10 +22,21 @@ export const setCanvasSize = () => {
 };
 
 const initApp = async () => {
+  const reconnecting = WebRtcManager.hasStoredGameId();
   AudioManager.init();
   WebRtcManager.init();
+  if (reconnecting) {
+    ScreenManager.showScreen(ScreenManager.screens.LOADING);
+    setText("loading-status", "Reconnecting...");
+  }
 
   await AssetLoader.loadAllAssets();
+  if (
+    reconnecting &&
+    GameState.getCurrentScreen() === ScreenManager.screens.LOADING
+  ) {
+    setText("loading-status", "Reconnecting...");
+  }
 
   GamepadManager.init({
     onStatusChange: () => {
@@ -47,7 +58,7 @@ const initApp = async () => {
   GameController.init();
   UIController.init();
   GamepadUINavigator.init();
-  if (GameState.getCurrentScreen() !== ScreenManager.screens.ERROR) {
+  if (GameState.getCurrentScreen() === null) {
     ScreenManager.showScreen(ScreenManager.screens.LOBBY);
   }
 

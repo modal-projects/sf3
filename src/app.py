@@ -77,7 +77,7 @@ gameplay_image = (
 
 
 # One sessioned server hosts both the frontend and the gameplay backend so that the
-# page, the `/ws/{peer_id}` signaling socket and `/api/*` are same-origin and all
+# page, the `/ws/{game_id}` signaling socket and `/api/*` are same-origin and all
 # carry the session cookie that pins the browser to the container running its emulator.
 # `max_concurrency` is the number of live sessions a container will accept.
 @app.server(
@@ -101,6 +101,7 @@ class Web:
 
         self.participant_servers = {}
         self.participant_boot_tasks = {}
+        self.game_sessions = {}
         if os.environ.get("SF3_WARM_MODELS") == "1":
             for participant, model in MODELS.items():
                 try:
@@ -215,16 +216,11 @@ class Web:
                 )
             return RTCConfiguration(iceServers=ice_servers)
 
-        class GameVideoTrack(VideoStreamTrack):
-            def __init__(self, should_stop, target_fps: float = 60.0):
-                super().__init__()
-                self.should_stop = should_stop
+        class GameFrameBuffer:
+            def __init__(self, target_fps: float = 60.0):
                 self.target_fps = target_fps
                 self.latest_frame = None
                 self.phase_frames = queue.Queue(maxsize=2)
-                self._timestamp = 0
-                self._has_sent_frame = False
-                self._last_frame_at = None
 
             def set_frame(self, frame):
                 self.latest_frame = frame
@@ -250,23 +246,28 @@ class Web:
                     except queue.Empty:
                         break
 
-            async def wait_for_phase_frames(self):
-                while (
-                    not self.phase_frames.empty()
-                    and self.readyState == "live"
-                    and not self.should_stop()
-                ):
+            async def wait_for_phase_frames(self, should_stop):
+                while not self.phase_frames.empty() and not should_stop():
                     await asyncio.sleep(1 / (self.target_fps * 2))
 
+        class GameVideoTrack(VideoStreamTrack):
+            def __init__(self, frame_buffer, should_stop):
+                super().__init__()
+                self.frame_buffer = frame_buffer
+                self.should_stop = should_stop
+                self._timestamp = 0
+                self._has_sent_frame = False
+                self._last_frame_at = None
+
             async def recv(self) -> VideoFrame:
-                while self.latest_frame is None:
-                    await asyncio.sleep(1 / self.target_fps)
-                frame = self.latest_frame
+                while self.frame_buffer.latest_frame is None:
+                    await asyncio.sleep(1 / self.frame_buffer.target_fps)
+                frame = self.frame_buffer.latest_frame
 
                 loop = asyncio.get_running_loop()
-                timestamp_step = int((1 / self.target_fps) * 90000)
+                timestamp_step = int((1 / self.frame_buffer.target_fps) * 90000)
                 if self._last_frame_at is not None:
-                    deadline = self._last_frame_at + (1 / self.target_fps)
+                    deadline = self._last_frame_at + (1 / self.frame_buffer.target_fps)
                     while (delay := deadline - loop.time()) > 0:
                         await asyncio.sleep(delay)
                 self._last_frame_at = loop.time()
@@ -276,9 +277,9 @@ class Web:
                     self._has_sent_frame = True
 
                 try:
-                    frame = self.phase_frames.get_nowait()
+                    frame = self.frame_buffer.phase_frames.get_nowait()
                 except queue.Empty:
-                    frame = self.latest_frame
+                    frame = self.frame_buffer.latest_frame
                 output = VideoFrame.from_ndarray(frame, format="rgb24")
                 output.pts = self._timestamp
                 output.time_base = Fraction(1, 90000)
@@ -312,9 +313,10 @@ class Web:
         # manages game state and communication
 
         class GameSession:
-            def __init__(self):
+            def __init__(self, game_id):
                 # game state
 
+                self.game_id = game_id
                 self.env = None
                 self.game_running = False
                 self.accepts_input = False
@@ -360,8 +362,14 @@ class Web:
 
                 # communication
 
+                self.frame_buffer = GameFrameBuffer()
                 self.outbound_message_queue = asyncio.Queue()
                 self.stop_event = asyncio.Event()
+                self.connection_event = asyncio.Event()
+                self.connection_generation = 0
+                self.connection_replaced_event = None
+                self.runtime_task = None
+                self.expiry_task = None
                 self.cleanup_tasks = set()
                 self.env_operation_task = None
 
@@ -371,8 +379,56 @@ class Web:
 
             def request_stop(self):
                 self.stop_event.set()
+                self.connection_event.set()
+                if self.connection_replaced_event is not None:
+                    self.connection_replaced_event.set()
                 if self.env is not None:
                     self.env.request_stop()
+
+            async def attach_connection(self, replaced_event):
+                if self.connection_replaced_event is not None:
+                    self.connection_replaced_event.set()
+                if self.expiry_task is not None:
+                    self.expiry_task.cancel()
+                    self.expiry_task = None
+                self.connection_generation += 1
+                self.connection_replaced_event = replaced_event
+                self.connection_event.set()
+                self.outbound_message_queue = asyncio.Queue()
+                await self.send_game_state()
+                return self.connection_generation
+
+            def detach_connection(self, generation):
+                if generation != self.connection_generation:
+                    return False
+                self.connection_replaced_event = None
+                self.connection_event.clear()
+                self.invalidate_actions()
+                return True
+
+            def is_connection_active(self, generation):
+                return (
+                    generation == self.connection_generation
+                    and self.connection_event.is_set()
+                    and not self.stop_event.is_set()
+                )
+
+            async def wait_for_connection(self):
+                if self.stop_event.is_set():
+                    return False
+                if self.connection_event.is_set():
+                    return True
+                connection_task = asyncio.create_task(self.connection_event.wait())
+                stop_task = asyncio.create_task(self.stop_event.wait())
+                done, pending = await asyncio.wait(
+                    {connection_task, stop_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                return connection_task in done and not self.stop_event.is_set()
 
             async def run_env_operation(self, func, /, *args, **kwargs):
                 if self.env_operation_task is not None:
@@ -448,6 +504,12 @@ class Web:
 
             async def send_game_state(self):
                 self.sync_accepts_input_state()
+                self.game_state["player1_participant"] = self.game_settings[
+                    "player1Participant"
+                ]
+                self.game_state["player2_participant"] = self.game_settings[
+                    "player2Participant"
+                ]
                 await self.outbound_message_queue.put(
                     {
                         "type": "game_state",
@@ -616,17 +678,39 @@ class Web:
 
         # routes
 
-        @web_app.websocket("/ws/{peer_id}")
-        async def websocket_endpoint(websocket: WebSocket, peer_id: str):
+        @web_app.websocket("/ws/{game_id}")
+        async def websocket_endpoint(websocket: WebSocket, game_id: str):
+            if (
+                not game_id
+                or len(game_id) > 64
+                or not all(
+                    character.isalnum() or character in "-_" for character in game_id
+                )
+            ):
+                await websocket.close(code=1008)
+                return
+
+            session = self.game_sessions.get(game_id)
+            if session is None or session.stop_event.is_set():
+                session = GameSession(game_id)
+                self.game_sessions[game_id] = session
+
             await websocket.accept()
 
-            session = GameSession()
             frame_encoder = FrameEncoder()
-            video_track = GameVideoTrack(session.stop_event.is_set)
+            video_track = GameVideoTrack(
+                session.frame_buffer,
+                session.stop_event.is_set,
+            )
             control_channel = None
             control_channel_ready = asyncio.Event()
             control_message_queue = asyncio.Queue(maxsize=CONTROL_MESSAGE_QUEUE_LIMIT)
+            connection_lost_event = asyncio.Event()
+            connection_replaced_event = asyncio.Event()
             pc = RTCPeerConnection(configuration=build_rtc_configuration())
+            connection_generation = await session.attach_connection(
+                connection_replaced_event
+            )
 
             async def prefetch_required_servers(
                 player1_participant: str, player2_participant: str
@@ -643,8 +727,8 @@ class Web:
             async def on_connectionstatechange():
                 state = pc.connectionState
                 if state in {"closed", "failed"} and not session.stop_event.is_set():
-                    print(f"Stopping session: peer connection {state}")
-                    session.request_stop()
+                    print(f"Detaching connection: peer connection {state}")
+                    connection_lost_event.set()
 
             @pc.on("icecandidate")
             async def on_icecandidate(candidate):
@@ -684,18 +768,18 @@ class Web:
                 @channel.on("close")
                 def on_channel_close():
                     control_channel_ready.clear()
-                    session.request_stop()
+                    connection_lost_event.set()
 
                 @channel.on("message")
                 def on_channel_message(message):
                     try:
                         control_message_queue.put_nowait(message)
                     except asyncio.QueueFull:
-                        print("Closing session with a full control-message queue")
-                        session.request_stop()
+                        print("Closing connection with a full control-message queue")
+                        connection_lost_event.set()
 
             async def process_control_messages():
-                while not session.stop_event.is_set():
+                while session.is_connection_active(connection_generation):
                     get_message_task = asyncio.create_task(control_message_queue.get())
                     stop_task = asyncio.create_task(session.stop_event.wait())
                     done, pending = await asyncio.wait(
@@ -709,6 +793,8 @@ class Web:
                     if stop_task in done:
                         break
                     message = get_message_task.result()
+                    if not session.is_connection_active(connection_generation):
+                        break
                     try:
                         if isinstance(message, bytes):
                             payload = json.loads(message.decode("utf-8"))
@@ -722,7 +808,7 @@ class Web:
 
             async def process_signaling_messages():
                 try:
-                    while not session.stop_event.is_set():
+                    while session.is_connection_active(connection_generation):
                         if websocket.client_state == WebSocketState.DISCONNECTED:
                             break
                         receive_task = asyncio.create_task(websocket.receive_json())
@@ -783,20 +869,20 @@ class Web:
                             continue
                 except WebSocketDisconnect:
                     if pc.connectionState == "connected":
-                        await session.stop_event.wait()
+                        await connection_lost_event.wait()
                     else:
                         print(
-                            "Stopping session: signaling websocket disconnected "
+                            "Detaching connection: signaling websocket disconnected "
                             f"while peer connection {pc.connectionState}"
                         )
-                        session.request_stop()
+                        connection_lost_event.set()
                 except Exception:
                     print(f"Error in signaling processor: {traceback.format_exc()}")
-                    session.request_stop()
+                    connection_lost_event.set()
 
             async def process_outbound_messages():
                 try:
-                    while not session.stop_event.is_set():
+                    while session.is_connection_active(connection_generation):
                         get_message_task = asyncio.create_task(
                             session.outbound_message_queue.get()
                         )
@@ -812,7 +898,9 @@ class Web:
                         if stop_task in done:
                             break
                         message = get_message_task.result()
-                        while not session.stop_event.is_set():
+                        if not session.is_connection_active(connection_generation):
+                            break
+                        while session.is_connection_active(connection_generation):
                             if control_channel and control_channel.readyState == "open":
                                 control_channel.send(json.dumps(message))
                                 break
@@ -836,11 +924,11 @@ class Web:
                                 break
                 except Exception:
                     print(f"Error in outgoing processor: {traceback.format_exc()}")
-                    session.request_stop()
+                    connection_lost_event.set()
 
             async def keepalive():
                 try:
-                    while not session.stop_event.is_set():
+                    while session.is_connection_active(connection_generation):
                         if websocket.client_state != WebSocketState.DISCONNECTED:
                             await websocket.send_json(
                                 {
@@ -863,11 +951,11 @@ class Web:
                             pass
                 except Exception:
                     print(f"Error in keepalive: {traceback.format_exc()}")
-                    session.request_stop()
+                    connection_lost_event.set()
 
             async def prepare_for_next_game(*, preserve_frame: bool = True):
                 if not preserve_frame:
-                    video_track.reset()
+                    session.frame_buffer.reset()
                 await session.prepare_for_next_game()
 
             async def fail_current_game(message: str):
@@ -899,7 +987,9 @@ class Web:
 
             async def wait_for_models(model_ready_task, *, show_loading: bool) -> bool:
                 if show_loading and not model_ready_task.done():
-                    await video_track.wait_for_phase_frames()
+                    await session.frame_buffer.wait_for_phase_frames(
+                        session.stop_event.is_set
+                    )
                     await show_models_loading()
                 try:
                     await model_ready_task
@@ -935,7 +1025,7 @@ class Web:
                     phase_edge_armed = False
                     generation = phase_generation
                     event_loop.call_soon_threadsafe(begin_non_fight_phase, generation)
-                video_track.queue_frame(np.ascontiguousarray(frame))
+                session.frame_buffer.queue_frame(np.ascontiguousarray(frame))
 
             def send_presentation(name: str, **fields):
                 event_loop.call_soon_threadsafe(
@@ -1003,6 +1093,8 @@ class Web:
             async def run_robot_background():
                 try:
                     while not session.stop_event.is_set():
+                        if not await session.wait_for_connection():
+                            break
                         await asyncio.sleep(0.001)
 
                         if (
@@ -1152,21 +1244,26 @@ class Web:
 
             async def run_game_loop():
                 nonlocal phase_edge_armed, phase_generation
-                frame_interval = 1.0 / video_track.target_fps
+                frame_interval = 1.0 / session.frame_buffer.target_fps
 
                 async def pace_frame(last_frame_at):
+                    if not await session.wait_for_connection():
+                        return None
+                    now = asyncio.get_running_loop().time()
                     if last_frame_at is not None:
                         deadline = last_frame_at + frame_interval
-                        while (
-                            delay := deadline - asyncio.get_running_loop().time()
-                        ) > 0:
-                            await asyncio.sleep(delay)
+                        if deadline > now:
+                            await asyncio.sleep(deadline - now)
                     return asyncio.get_running_loop().time()
 
                 try:
                     while not session.stop_event.is_set():
+                        if not await session.wait_for_connection():
+                            break
                         await session.cleanup_environment()
-                        stream_pregame_frames = video_track.latest_frame is None
+                        stream_pregame_frames = (
+                            session.frame_buffer.latest_frame is None
+                        )
                         pregame_frame_sink = (
                             stream_phase_frame if stream_pregame_frames else None
                         )
@@ -1186,7 +1283,9 @@ class Web:
 
                         initial_frame = raw.get("frame")
                         if stream_pregame_frames and initial_frame is not None:
-                            video_track.set_frame(np.ascontiguousarray(initial_frame))
+                            session.frame_buffer.set_frame(
+                                np.ascontiguousarray(initial_frame)
+                            )
 
                         session.game_state["status"] = "pregame"
                         session.game_state["winner"] = ""
@@ -1202,6 +1301,8 @@ class Web:
                             and not session.stop_event.is_set()
                         ):
                             last_frame_at = await pace_frame(last_frame_at)
+                            if session.stop_event.is_set():
+                                break
                             try:
                                 raw = await session.run_env_operation(
                                     session.env.pregame_step,
@@ -1219,7 +1320,9 @@ class Web:
                             }
                             frame = session.observation.get("frame")
                             if stream_pregame_frames and frame is not None:
-                                video_track.set_frame(np.ascontiguousarray(frame))
+                                session.frame_buffer.set_frame(
+                                    np.ascontiguousarray(frame)
+                                )
 
                         if session.stop_event.is_set():
                             break
@@ -1236,7 +1339,7 @@ class Web:
                             )
                         )
                         models_loading_delay_frames = max(
-                            1, round(video_track.target_fps)
+                            1, round(session.frame_buffer.target_fps)
                         )
                         models_loading_frames_remaining = None
                         models_ready_checked = False
@@ -1262,10 +1365,12 @@ class Web:
                             await fail_current_game(format_runtime_error(e))
                             return
 
-                        await video_track.wait_for_phase_frames()
+                        await session.frame_buffer.wait_for_phase_frames(
+                            session.stop_event.is_set
+                        )
                         frame = session.observation.get("frame")
                         if frame is not None:
-                            video_track.set_frame(np.ascontiguousarray(frame))
+                            session.frame_buffer.set_frame(np.ascontiguousarray(frame))
 
                         session.accepts_input = True
                         session.game_state["status"] = "selecting"
@@ -1274,6 +1379,8 @@ class Web:
                         last_frame_at = None
                         while session.game_running and not session.stop_event.is_set():
                             last_frame_at = await pace_frame(last_frame_at)
+                            if session.stop_event.is_set():
+                                break
 
                             selecting = bool(
                                 session.info and session.info.get("selecting")
@@ -1317,7 +1424,9 @@ class Web:
 
                             frame = session.observation.get("frame")
                             if frame is not None:
-                                video_track.set_frame(np.ascontiguousarray(frame))
+                                session.frame_buffer.set_frame(
+                                    np.ascontiguousarray(frame)
+                                )
 
                             selection_changed = False
                             if selecting:
@@ -1389,7 +1498,9 @@ class Web:
 
                             if session.info.get("game_done", False):
                                 if terminated or truncated:
-                                    await video_track.wait_for_phase_frames()
+                                    await session.frame_buffer.wait_for_phase_frames(
+                                        session.stop_event.is_set
+                                    )
                                     session.accepts_input = False
                                     session.invalidate_actions()
                                     p1_wins = session.observation["P1"]["wins"][0]
@@ -1443,58 +1554,93 @@ class Web:
                     print(f"Error in game loop: {traceback.format_exc()}")
                     session.request_stop()
 
-            await session.send_game_state()
+            if session.runtime_task is None:
+
+                async def run_runtime():
+                    tasks = [
+                        asyncio.create_task(run_robot_background()),
+                        asyncio.create_task(run_game_loop()),
+                    ]
+                    try:
+                        done, _ = await asyncio.wait(
+                            tasks,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        for task in done:
+                            task.result()
+                    except Exception as exc:
+                        print(f"Game runtime error: {exc}")
+                    finally:
+                        session.request_stop()
+                        session.game_running = False
+                        _, pending_tasks = await asyncio.wait(
+                            tasks,
+                            timeout=SESSION_TASK_SHUTDOWN_TIMEOUT_SECONDS,
+                        )
+                        for task in pending_tasks:
+                            task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                        await session.cleanup()
+                        expiry_task = session.expiry_task
+                        session.expiry_task = None
+                        if (
+                            expiry_task is not None
+                            and expiry_task is not asyncio.current_task()
+                        ):
+                            expiry_task.cancel()
+                            await asyncio.gather(expiry_task, return_exceptions=True)
+                        if self.game_sessions.get(game_id) is session:
+                            self.game_sessions.pop(game_id, None)
+
+                session.runtime_task = asyncio.create_task(run_runtime())
+
             tasks = [
                 asyncio.create_task(process_signaling_messages()),
                 asyncio.create_task(process_control_messages()),
                 asyncio.create_task(process_outbound_messages()),
                 asyncio.create_task(keepalive()),
-                asyncio.create_task(run_robot_background()),
-                asyncio.create_task(run_game_loop()),
             ]
             stop_waiter = asyncio.create_task(session.stop_event.wait())
+            lost_waiter = asyncio.create_task(connection_lost_event.wait())
+            replaced_waiter = asyncio.create_task(connection_replaced_event.wait())
+            waiters = [stop_waiter, lost_waiter, replaced_waiter]
 
             try:
                 done, _ = await asyncio.wait(
-                    {*tasks, stop_waiter},
+                    {*tasks, *waiters},
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 for task in done:
-                    if task is not stop_waiter:
+                    if task in tasks:
                         task.result()
             except WebSocketDisconnect:
-                session.request_stop()
-                session.game_running = False
-            except Exception as e:
-                print(f"WebSocket error: {e}")
-                session.request_stop()
-                session.game_running = False
-                session.game_state["status"] = "error"
-                session.game_state["error"] = str(e)
-                try:
-                    await session.send_game_state()
-                except Exception:
-                    print("Warning: could not send error message")
+                connection_lost_event.set()
+            except Exception as exc:
+                print(f"WebSocket connection error: {exc}")
+                connection_lost_event.set()
             finally:
-                session.request_stop()
-                session.game_running = False
-                _, pending_tasks = await asyncio.wait(
-                    tasks,
-                    timeout=SESSION_TASK_SHUTDOWN_TIMEOUT_SECONDS,
-                )
-                for task in pending_tasks:
-                    task.cancel()
-                stop_waiter.cancel()
-                await asyncio.gather(
-                    *tasks,
-                    stop_waiter,
-                    return_exceptions=True,
-                )
+                for task in (*tasks, *waiters):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, *waiters, return_exceptions=True)
                 await pc.close()
-                await session.cleanup()
+                if session.detach_connection(connection_generation):
+
+                    async def expire_disconnected_session():
+                        try:
+                            await asyncio.sleep(GAMEPLAY_SESSION_IDLE_TIMEOUT_SECONDS)
+                        except asyncio.CancelledError:
+                            return
+                        if not session.connection_event.is_set():
+                            session.request_stop()
+
+                    if not session.stop_event.is_set():
+                        session.expiry_task = asyncio.create_task(
+                            expire_disconnected_session()
+                        )
 
         @web_app.websocket("/ws")
-        async def websocket_missing_peer_id(websocket: WebSocket):
+        async def websocket_missing_game_id(websocket: WebSocket):
             await websocket.close(code=1008)
 
         @web_app.get("/api/extra-moves")

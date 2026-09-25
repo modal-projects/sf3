@@ -1,5 +1,6 @@
 
 const iceServerTimeoutMs = 3000;
+const gameIdStorageKey = "sf3-game-id";
 const fallbackIceServers = [{ urls: "stun:stun.l.google.com:19302" }];
 
 export const WebRtcManager = {
@@ -9,6 +10,7 @@ export const WebRtcManager = {
   onMessage: null,
   onRemoteStream: null,
   onDisconnect: null,
+  gameId: "",
   peerId: "",
   turnResolver: null,
   hasStarted: false,
@@ -52,6 +54,7 @@ export const WebRtcManager = {
 
   async connect() {
     try {
+      this.gameId = this.getGameId();
       this.peerId = this.generateShortId();
       await this.openSignalingSocket();
       const iceServers = await this.getIceServers();
@@ -126,7 +129,7 @@ export const WebRtcManager = {
   },
 
   async openSignalingSocket() {
-    const wsUrl = new URL(`/ws/${this.peerId}`, window.location.href);
+    const wsUrl = new URL(`/ws/${this.gameId}`, window.location.href);
     wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
     this.ws = new WebSocket(wsUrl.toString());
 
@@ -307,12 +310,35 @@ export const WebRtcManager = {
     this.pendingDisconnect = message;
   },
 
+  hasStoredGameId() {
+    try {
+      const stored = window.sessionStorage.getItem(gameIdStorageKey);
+      return /^[A-Za-z0-9_-]{22}$/.test(stored || "");
+    } catch {
+      return false;
+    }
+  },
+
+  getGameId() {
+    try {
+      const stored = window.sessionStorage.getItem(gameIdStorageKey);
+      if (/^[A-Za-z0-9_-]{22}$/.test(stored || "")) return stored;
+      const gameId = this.generateShortId();
+      window.sessionStorage.setItem(gameIdStorageKey, gameId);
+      return gameId;
+    } catch {
+      return this.gameId || this.generateShortId();
+    }
+  },
+
   generateShortId() {
     const chars =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const bytes = new Uint8Array(22);
+    window.crypto.getRandomValues(bytes);
     let result = "";
-    for (let i = 0; i < 22; i += 1) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    for (const byte of bytes) {
+      result += chars.charAt(byte % chars.length);
     }
     return result;
   },

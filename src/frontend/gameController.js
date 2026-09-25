@@ -506,7 +506,18 @@ const createGameController = () => {
   };
 
   const handleGameState = (data) => {
-    GameState.update({ gamePhase: data.status });
+    const participantsAreAuthoritative = !["initializing", "pregame"].includes(
+      data.status
+    );
+    GameState.update({
+      gamePhase: data.status,
+      ...(participantsAreAuthoritative && data.player1_participant
+        ? { player1Participant: data.player1_participant }
+        : {}),
+      ...(participantsAreAuthoritative && data.player2_participant
+        ? { player2Participant: data.player2_participant }
+        : {}),
+    });
     switch (data.status) {
       case "initializing":
         setText("loading-status", "Starting game...");
@@ -586,7 +597,10 @@ const createGameController = () => {
           acceptsInput: false,
           keyState: {},
         });
+        ScreenManager.showScreen(ScreenManager.screens.GAME);
+        setCanvasSize();
         setCanvasLoading(false);
+        restartVideoRendering();
         GamepadManager.setUIActive(true);
         GamepadUINavigator.updateGamepadSections(true);
         break;
@@ -621,9 +635,13 @@ const createGameController = () => {
 
       case "finished":
         GameState.update({
+          loaded: true,
           acceptsInput: false,
           keyState: {},
         });
+        ScreenManager.showScreen(ScreenManager.screens.GAME);
+        setCanvasSize();
+        restartVideoRendering();
         endFlow = "ending";
         pendingFinishedState = data;
         revealReplayIfReady();
