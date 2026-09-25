@@ -76,7 +76,7 @@ modal deploy -m src.app
 
 ### Updates
 
-- The gameplay backend now runs as a [Sessioned Server](https://modal.com/docs/guide/servers) (`@app.server` + `@modal.sessioned()`). `sf3.modal.dev` starts a session and redirects the browser to it; the page, signaling websocket and `/api/*` are then pinned to the container running that player's emulator, and reconnects within 10 minutes land on the same container. Requires a Modal client with `modal.sessioned` (nightly `>=1.5.6.dev27`).
+- The gameplay backend now runs as a [Sessioned Server](https://modal.com/docs/guide/servers) (`@app.server` + `@modal.sessioned()`). `sf3.modal.dev` starts a session and redirects the browser to it; the page, signaling websocket and `/api/*` are then pinned to the container running that player's emulator, and reconnects within 10 minutes land on the same container. Requires `modal>=1.5.6.dev27` (pinned via `[tool.uv] override-dependencies`, since `modal-training-gym` still pins 1.5.2).
 
 - The methodology for measuring LLM latencies in `src/serve/` was fixed, alongside an updated diagram:
 
