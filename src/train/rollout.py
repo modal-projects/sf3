@@ -9,6 +9,7 @@ from modal_training_gym import Qwen3_VL_8B
 from src.env import EnvironmentConfig, create_environment
 from src.utils import (
     CHARACTER_MAPPING,
+    HEALTH_MAX,
     RECENT_MOVE_LIMIT,
     FrameEncoder,
     create_messages,
@@ -20,9 +21,9 @@ from src.utils import (
 MODEL = Qwen3_VL_8B()
 ROSTER = tuple(CHARACTER_MAPPING.values())
 OUTFIT = SUPER_ART = 1
-REWARDS = {"P1": (1.0, -1.0), "P2": (-1.0, 1.0), "draw": (0.0, 0.0)}
 FRAME_KEY = "sf3_frame"
 IMAGE_PAD = "<|image_pad|>"
+GAMMA = 0.9
 
 _fights: dict[tuple[int, int], asyncio.Task] = {}
 _image_tokens_by_frame_size: dict[tuple[int, int], int] = {}
@@ -95,7 +96,7 @@ async def _move(
 
 
 async def _play_fight(args, sample, sampling_params):
-    characters = random.Random(sample.group_index).sample(ROSTER, 2)
+    characters = random.sample(ROSTER, 2)
     identities = [{"character": c, "superArt": SUPER_ART} for c in characters]
     env = await asyncio.to_thread(
         create_environment,
@@ -111,6 +112,7 @@ async def _play_fight(args, sample, sampling_params):
         encoder = FrameEncoder()
         recent = [deque(maxlen=RECENT_MOVE_LIMIT), deque(maxlen=RECENT_MOVE_LIMIT)]
         moves = [[], []]
+        damage, rounds, round_index = [], [], 0
         while True:
             fighters = [
                 player_state(observation, identities[seat], f"P{seat + 1}")
@@ -144,22 +146,33 @@ async def _play_fight(args, sample, sampling_params):
                 )
                 recent[seat].append(move_name)
                 buttons.append(move_buttons)
+            turn_damage = 0.0
             for p1_button, p2_button in zip_longest(*buttons, fillvalue=0):
-                observation, _, terminated, _, info = await asyncio.to_thread(
+                observation, step_damage, terminated, _, info = await asyncio.to_thread(
                     env.step, {"agent_0": p1_button, "agent_1": p2_button}
                 )
+                turn_damage += step_damage
                 if terminated or info["round_done"]:
                     break
+            damage.append(turn_damage)
+            rounds.append(round_index)
             if info["round_done"]:
+                round_index += 1
                 for seat_recent in recent:
                     seat_recent.clear()
             if terminated:
                 break
     finally:
         await asyncio.to_thread(env.close)
-    for seat_moves, reward in zip(moves, REWARDS[info["winner"]]):
-        for move in seat_moves:
-            move.reward = reward
+    returns, G = [0.0] * len(damage), 0.0
+    for t in reversed(range(len(damage))):
+        if t + 1 < len(damage) and rounds[t + 1] != rounds[t]:
+            G = 0.0
+        G = damage[t] + GAMMA * G
+        returns[t] = G / HEALTH_MAX
+    for seat_moves, sign in zip(moves, (1, -1)):
+        for move, G in zip(seat_moves, returns):
+            move.reward = sign * G
     return moves
 
 

@@ -11,10 +11,11 @@ from modal_training_gym import (
 from src.train.rollout import sf3_generate
 from src.utils import MAX_TOKENS, create_gameplay_image
 
-NUM_ROLLOUTS = 10
+NUM_ROLLOUTS = 20
 
-ROLLOUT_BATCH_SIZE = 4
+ROLLOUT_BATCH_SIZE = 16
 N_SAMPLES_PER_PROMPT = 2
+GLOBAL_BATCH_SIZE = ROLLOUT_BATCH_SIZE * N_SAMPLES_PER_PROMPT // 4
 
 model = Qwen3_VL_8B()
 recipe = Qwen3_VL_8B_Recipe(
@@ -26,14 +27,14 @@ recipe = Qwen3_VL_8B_Recipe(
         add_python_source=True,
     ),
     num_rollout=NUM_ROLLOUTS,
+    save_interval=5,
     rollout_batch_size=ROLLOUT_BATCH_SIZE,
     n_samples_per_prompt=N_SAMPLES_PER_PROMPT,
-    global_batch_size=ROLLOUT_BATCH_SIZE * N_SAMPLES_PER_PROMPT,
+    global_batch_size=GLOBAL_BATCH_SIZE,
     rollout_max_response_len=MAX_TOKENS,
     extra_config={
         **Qwen3_VL_8B_Recipe().extra_config,
-        "micro_batch_size": 8,  # a step is ~14k moves; mbs=1 took ~60 min to train
-        "rewards_normalization": False,
+        "micro_batch_size": 8,
         "custom_megatron_init_path": "src.train.rollout.megatron_init",
     },
 )

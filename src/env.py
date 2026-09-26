@@ -303,8 +303,10 @@ class LocalSfiiiAdapter:
                 f"Expected {_ROM_SHA256}, got {actual_sha256}"
             )
 
+        from MAMEToolkit import emulator
         from MAMEToolkit.emulator import Address, Emulator
 
+        Path(emulator.__file__).with_name("mame").joinpath("pipes").mkdir(exist_ok=True)
         self.config = config
         self.memory_addresses = {
             "fighting": Address("0x02011389", "u8"),
