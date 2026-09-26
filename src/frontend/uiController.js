@@ -394,6 +394,9 @@ const createUIController = () => {
         if ("serverReady" in data || "gamePhase" in data) {
           updateLobbyReadiness();
         }
+        if ("player1Participant" in data || "player2Participant" in data) {
+          syncParticipantUI();
+        }
         if (
           "currentCharacter" in data ||
           "player1" in data ||

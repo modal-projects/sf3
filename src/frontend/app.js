@@ -22,6 +22,7 @@ export const setCanvasSize = () => {
 };
 
 const initApp = async () => {
+  const reconnecting = WebRtcManager.hasStoredGameId();
   AudioManager.init();
   WebRtcManager.init();
 
@@ -47,7 +48,7 @@ const initApp = async () => {
   GameController.init();
   UIController.init();
   GamepadUINavigator.init();
-  if (GameState.getCurrentScreen() !== ScreenManager.screens.ERROR) {
+  if (!reconnecting && GameState.getCurrentScreen() === null) {
     ScreenManager.showScreen(ScreenManager.screens.LOBBY);
   }
 

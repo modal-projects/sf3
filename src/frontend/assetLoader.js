@@ -1,6 +1,5 @@
 import { AudioManager } from "./audioManager.js";
 import { GameState } from "./gameState.js";
-import { gameplayUrl } from "./runtimeConfig.js";
 import { setText } from "./utils.js";
 import { PARTICIPANT_SPECS } from "./participantOptions.js";
 import { SOUND_KEYS } from "./constants.js";
@@ -178,9 +177,7 @@ const createAssetLoader = () => {
 
   const loadExtraMoves = async () => {
     try {
-      const response = await fetch(gameplayUrl("/api/extra-moves"), {
-        mode: "cors",
-      });
+      const response = await fetch("/api/extra-moves");
       const data = await response.json();
       return {
         combos: data.combos || {},

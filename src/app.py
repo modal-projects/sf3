@@ -2,12 +2,11 @@ import asyncio
 import mimetypes
 import os
 import queue
+import threading
 import time
 from collections import deque
-from contextlib import asynccontextmanager
 from fractions import Fraction
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 import modal
 
@@ -43,6 +42,9 @@ for model in MODELS.values():
 CONTROL_MESSAGE_QUEUE_LIMIT = 128
 SESSION_TASK_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 ENV_INIT_TIMEOUT_SECONDS = 1 * MINUTES
+GAMEPLAY_PORT = 8000
+GAMEPLAY_SESSION_IDLE_TIMEOUT_SECONDS = 10 * MINUTES
+MAX_GAME_SESSIONS = 6
 
 
 local_assets_dir = Path(__file__).parent.parent / "assets"
@@ -52,55 +54,57 @@ remote_icons_dir = "/root/icons"
 remote_logos_dir = "/root/logos"
 remote_sounds_dir = "/root/sounds"
 
-static_image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .uv_pip_install(
-        "fastapi[standard]==0.116.1",
+launcher_image = modal.Image.debian_slim(python_version="3.12").uv_pip_install(
+    "fastapi[standard]==0.116.1",
+)
+
+gameplay_image = (
+    create_gameplay_image(
+        extra_python_packages=(
+            "aiortc",
+            "av",
+            "fastapi[standard]==0.116.1",
+            "websockets==15.0.1",
+        )
     )
     .add_local_dir(Path(__file__).parent / "frontend", remote_frontend_dir)
-    .add_local_dir(
-        local_assets_dir / "icons",
-        remote_icons_dir,
-    )
-    .add_local_dir(
-        local_assets_dir / "logos",
-        remote_logos_dir,
-    )
-    .add_local_dir(
-        local_assets_dir / "sounds",
-        remote_sounds_dir,
-    )
-)
-
-gameplay_image = create_gameplay_image(
-    extra_python_packages=(
-        "aiortc",
-        "av",
-        "fastapi[standard]==0.116.1",
-        "websockets==15.0.1",
-    )
+    .add_local_dir(local_assets_dir / "icons", remote_icons_dir)
+    .add_local_dir(local_assets_dir / "logos", remote_logos_dir)
+    .add_local_dir(local_assets_dir / "sounds", remote_sounds_dir)
 )
 
 
-@app.cls(
+@app.server(
     image=gameplay_image,
-    region=CONTAINER_REGION,
+    compute_region=CONTAINER_REGION,
     routing_region=ROUTING_REGION,
     min_containers=1,
+    max_concurrency=3,
+    target_concurrency=2,
     secrets=[modal.Secret.from_name("turn-credentials")],
-    timeout=24 * 60 * MINUTES,
+    port=GAMEPLAY_PORT,
+    startup_timeout=5 * MINUTES,
 )
-@modal.concurrent(
-    max_inputs=3,
-    target_inputs=2,
-)
+@modal.sessioned()
 class Web:
     @modal.enter()
     def enter(
         self,
     ):
+        import uvicorn
+
         self.participant_servers = {}
         self.participant_boot_tasks = {}
+        self.game_sessions = {}
+        self.http_server = uvicorn.Server(
+            uvicorn.Config(
+                self.build_app(),
+                host="0.0.0.0",
+                port=GAMEPLAY_PORT,
+                log_level="warning",
+            )
+        )
+        threading.Thread(target=self.http_server.run, daemon=True).start()
         if os.environ.get("SF3_WARM_MODELS") != "1":
             return
         for participant, model in MODELS.items():
@@ -109,6 +113,10 @@ class Web:
             except Exception as exc:
                 label = PARTICIPANT_LABELS.get(participant, participant)
                 print(f"Could not keep {label} warm: {exc!r}")
+
+    @modal.exit()
+    def exit(self):
+        self.http_server.should_exit = True
 
     async def create_participant_server(self, participant: str):
         model = MODELS.get(participant)
@@ -142,8 +150,7 @@ class Web:
 
         return await asyncio.shield(boot_task)
 
-    @modal.asgi_app(label="gameplay")
-    def app(self):
+    def build_app(self):
         import json
         import traceback
 
@@ -158,18 +165,12 @@ class Web:
         from aiortc.sdp import candidate_from_sdp
         from av import VideoFrame
         from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-        from fastapi.middleware.cors import CORSMiddleware
         from fastapi.middleware.gzip import GZipMiddleware
-        from fastapi.responses import JSONResponse
+        from fastapi.responses import FileResponse, JSONResponse, Response
+        from fastapi.staticfiles import StaticFiles
         from starlette.websockets import WebSocketState
 
         web_app = FastAPI()
-        web_app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
         web_app.add_middleware(GZipMiddleware, minimum_size=1024)
 
         # helper fns
@@ -209,16 +210,12 @@ class Web:
                 )
             return RTCConfiguration(iceServers=ice_servers)
 
-        class GameVideoTrack(VideoStreamTrack):
+        class GameFrameBuffer:
             def __init__(self, should_stop, target_fps: float = 60.0):
-                super().__init__()
                 self.should_stop = should_stop
                 self.target_fps = target_fps
                 self.latest_frame = None
                 self.phase_frames = queue.Queue(maxsize=2)
-                self._timestamp = 0
-                self._has_sent_frame = False
-                self._last_frame_at = None
 
             def set_frame(self, frame):
                 self.latest_frame = frame
@@ -235,32 +232,27 @@ class Web:
                         except queue.Empty:
                             pass
 
-            def reset(self):
-                # Hold the track open without encoding placeholder frames.
-                self.latest_frame = None
-                while not self.phase_frames.empty():
-                    try:
-                        self.phase_frames.get_nowait()
-                    except queue.Empty:
-                        break
-
             async def wait_for_phase_frames(self):
-                while (
-                    not self.phase_frames.empty()
-                    and self.readyState == "live"
-                    and not self.should_stop()
-                ):
+                while not self.phase_frames.empty() and not self.should_stop():
                     await asyncio.sleep(1 / (self.target_fps * 2))
 
+        class GameVideoTrack(VideoStreamTrack):
+            def __init__(self, frame_buffer):
+                super().__init__()
+                self.frame_buffer = frame_buffer
+                self._timestamp = 0
+                self._has_sent_frame = False
+                self._last_frame_at = None
+
             async def recv(self) -> VideoFrame:
-                while self.latest_frame is None:
-                    await asyncio.sleep(1 / self.target_fps)
-                frame = self.latest_frame
+                while self.frame_buffer.latest_frame is None:
+                    await asyncio.sleep(1 / self.frame_buffer.target_fps)
+                frame = self.frame_buffer.latest_frame
 
                 loop = asyncio.get_running_loop()
-                timestamp_step = int((1 / self.target_fps) * 90000)
+                timestamp_step = int((1 / self.frame_buffer.target_fps) * 90000)
                 if self._last_frame_at is not None:
-                    deadline = self._last_frame_at + (1 / self.target_fps)
+                    deadline = self._last_frame_at + (1 / self.frame_buffer.target_fps)
                     while (delay := deadline - loop.time()) > 0:
                         await asyncio.sleep(delay)
                 self._last_frame_at = loop.time()
@@ -270,9 +262,9 @@ class Web:
                     self._has_sent_frame = True
 
                 try:
-                    frame = self.phase_frames.get_nowait()
+                    frame = self.frame_buffer.phase_frames.get_nowait()
                 except queue.Empty:
-                    frame = self.latest_frame
+                    frame = self.frame_buffer.latest_frame
                 output = VideoFrame.from_ndarray(frame, format="rgb24")
                 output.pts = self._timestamp
                 output.time_base = Fraction(1, 90000)
@@ -354,8 +346,13 @@ class Web:
 
                 # communication
 
-                self.outbound_message_queue = asyncio.Queue()
                 self.stop_event = asyncio.Event()
+                self.frame_buffer = GameFrameBuffer(self.stop_event.is_set)
+                self.outbound_message_queue = asyncio.Queue()
+                self.connection_event = asyncio.Event()
+                self.connection_lost_event = None
+                self.runtime_task = None
+                self.expiry_handle = None
                 self.cleanup_tasks = set()
                 self.env_operation_task = None
 
@@ -365,8 +362,34 @@ class Web:
 
             def request_stop(self):
                 self.stop_event.set()
+                self.connection_event.set()
+                if self.connection_lost_event is not None:
+                    self.connection_lost_event.set()
                 if self.env is not None:
                     self.env.request_stop()
+
+            async def attach_connection(self, connection_lost_event):
+                if self.connection_lost_event is not None:
+                    self.connection_lost_event.set()
+                if self.expiry_handle is not None:
+                    self.expiry_handle.cancel()
+                    self.expiry_handle = None
+                self.connection_lost_event = connection_lost_event
+                self.connection_event.set()
+                self.outbound_message_queue = asyncio.Queue()
+                await self.send_game_state()
+
+            def detach_connection(self, connection_lost_event):
+                if self.connection_lost_event is not connection_lost_event:
+                    return False
+                self.connection_lost_event = None
+                self.connection_event.clear()
+                self.invalidate_actions()
+                return True
+
+            async def wait_for_connection(self):
+                await self.connection_event.wait()
+                return not self.stop_event.is_set()
 
             async def run_env_operation(self, func, /, *args, **kwargs):
                 if self.env_operation_task is not None:
@@ -442,6 +465,12 @@ class Web:
 
             async def send_game_state(self):
                 self.sync_accepts_input_state()
+                self.game_state["player1_participant"] = self.game_settings[
+                    "player1Participant"
+                ]
+                self.game_state["player2_participant"] = self.game_settings[
+                    "player2Participant"
+                ]
                 await self.outbound_message_queue.put(
                     {
                         "type": "game_state",
@@ -610,17 +639,37 @@ class Web:
 
         # routes
 
-        @web_app.websocket("/ws/{peer_id}")
-        async def websocket_endpoint(websocket: WebSocket, peer_id: str):
+        @web_app.websocket("/ws/{game_id}")
+        async def websocket_endpoint(websocket: WebSocket, game_id: str):
+            if (
+                not game_id
+                or len(game_id) > 64
+                or not all(
+                    character.isalnum() or character in "-_" for character in game_id
+                )
+            ):
+                await websocket.close(code=1008)
+                return
+
             await websocket.accept()
 
-            session = GameSession()
+            session = self.game_sessions.get(game_id)
+            creating_session = False
+            if session is None or session.stop_event.is_set():
+                if session is None and len(self.game_sessions) >= MAX_GAME_SESSIONS:
+                    await websocket.close(code=1013)
+                    return
+                session = GameSession()
+                creating_session = True
+
             frame_encoder = FrameEncoder()
-            video_track = GameVideoTrack(session.stop_event.is_set)
+            video_track = GameVideoTrack(session.frame_buffer)
             control_channel = None
             control_channel_ready = asyncio.Event()
             control_message_queue = asyncio.Queue(maxsize=CONTROL_MESSAGE_QUEUE_LIMIT)
+            connection_lost_event = asyncio.Event()
             pc = RTCPeerConnection(configuration=build_rtc_configuration())
+            await session.attach_connection(connection_lost_event)
 
             async def prefetch_required_servers(
                 player1_participant: str, player2_participant: str
@@ -637,8 +686,8 @@ class Web:
             async def on_connectionstatechange():
                 state = pc.connectionState
                 if state in {"closed", "failed"} and not session.stop_event.is_set():
-                    print(f"Stopping session: peer connection {state}")
-                    session.request_stop()
+                    print(f"Detaching connection: peer connection {state}")
+                    connection_lost_event.set()
 
             @pc.on("icecandidate")
             async def on_icecandidate(candidate):
@@ -678,29 +727,42 @@ class Web:
                 @channel.on("close")
                 def on_channel_close():
                     control_channel_ready.clear()
-                    session.request_stop()
+                    connection_lost_event.set()
 
                 @channel.on("message")
                 def on_channel_message(message):
                     try:
                         control_message_queue.put_nowait(message)
                     except asyncio.QueueFull:
-                        print("Closing session with a full control-message queue")
-                        session.request_stop()
+                        print("Closing connection with a full control-message queue")
+                        connection_lost_event.set()
 
-            async def process_control_messages():
-                while not session.stop_event.is_set():
-                    get_message_task = asyncio.create_task(control_message_queue.get())
-                    stop_task = asyncio.create_task(session.stop_event.wait())
-                    done, pending = await asyncio.wait(
-                        {get_message_task, stop_task},
+            async def wait_first(*awaitables, timeout=None):
+                tasks = [asyncio.create_task(awaitable) for awaitable in awaitables]
+                try:
+                    done, _ = await asyncio.wait(
+                        tasks,
+                        timeout=timeout,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
-                    for task in pending:
-                        task.cancel()
-                    if pending:
-                        await asyncio.gather(*pending, return_exceptions=True)
-                    if stop_task in done:
+                    return done, tasks
+                finally:
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+
+            async def process_control_messages():
+                while (
+                    not session.stop_event.is_set()
+                    and not connection_lost_event.is_set()
+                ):
+                    done, (get_message_task, stop_task, lost_task) = await wait_first(
+                        control_message_queue.get(),
+                        session.stop_event.wait(),
+                        connection_lost_event.wait(),
+                    )
+                    if stop_task in done or lost_task in done:
                         break
                     message = get_message_task.result()
                     try:
@@ -716,20 +778,18 @@ class Web:
 
             async def process_signaling_messages():
                 try:
-                    while not session.stop_event.is_set():
+                    while (
+                        not session.stop_event.is_set()
+                        and not connection_lost_event.is_set()
+                    ):
                         if websocket.client_state == WebSocketState.DISCONNECTED:
                             break
-                        receive_task = asyncio.create_task(websocket.receive_json())
-                        stop_task = asyncio.create_task(session.stop_event.wait())
-                        done, pending = await asyncio.wait(
-                            {receive_task, stop_task},
-                            return_when=asyncio.FIRST_COMPLETED,
+                        done, (receive_task, stop_task, lost_task) = await wait_first(
+                            websocket.receive_json(),
+                            session.stop_event.wait(),
+                            connection_lost_event.wait(),
                         )
-                        for task in pending:
-                            task.cancel()
-                        if pending:
-                            await asyncio.gather(*pending, return_exceptions=True)
-                        if stop_task in done:
+                        if stop_task in done or lost_task in done:
                             break
                         data = receive_task.result()
                         message_type = data.get("type", "unknown")
@@ -754,7 +814,6 @@ class Web:
                                 {
                                     "type": "answer",
                                     "sdp": pc.localDescription.sdp,
-                                    "peer_id": "server",
                                 }
                             )
                             continue
@@ -777,33 +836,32 @@ class Web:
                             continue
                 except WebSocketDisconnect:
                     if pc.connectionState == "connected":
-                        await session.stop_event.wait()
+                        await connection_lost_event.wait()
                     else:
                         print(
-                            "Stopping session: signaling websocket disconnected "
+                            "Detaching connection: signaling websocket disconnected "
                             f"while peer connection {pc.connectionState}"
                         )
-                        session.request_stop()
+                        connection_lost_event.set()
                 except Exception:
                     print(f"Error in signaling processor: {traceback.format_exc()}")
-                    session.request_stop()
+                    connection_lost_event.set()
 
             async def process_outbound_messages():
                 try:
-                    while not session.stop_event.is_set():
-                        get_message_task = asyncio.create_task(
-                            session.outbound_message_queue.get()
+                    while (
+                        not session.stop_event.is_set()
+                        and not connection_lost_event.is_set()
+                    ):
+                        (
+                            done,
+                            (get_message_task, stop_task, lost_task),
+                        ) = await wait_first(
+                            session.outbound_message_queue.get(),
+                            session.stop_event.wait(),
+                            connection_lost_event.wait(),
                         )
-                        stop_task = asyncio.create_task(session.stop_event.wait())
-                        done, pending = await asyncio.wait(
-                            {get_message_task, stop_task},
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                        for task in pending:
-                            task.cancel()
-                        if pending:
-                            await asyncio.gather(*pending, return_exceptions=True)
-                        if stop_task in done:
+                        if stop_task in done or lost_task in done:
                             break
                         message = get_message_task.result()
                         while not session.stop_event.is_set():
@@ -811,35 +869,30 @@ class Web:
                                 control_channel.send(json.dumps(message))
                                 break
 
-                            channel_ready_task = asyncio.create_task(
-                                control_channel_ready.wait()
+                            (
+                                done,
+                                (_channel_ready_task, stop_task, lost_task),
+                            ) = await wait_first(
+                                control_channel_ready.wait(),
+                                session.stop_event.wait(),
+                                connection_lost_event.wait(),
                             )
-                            stop_task = asyncio.create_task(session.stop_event.wait())
-                            done, pending = await asyncio.wait(
-                                {channel_ready_task, stop_task},
-                                return_when=asyncio.FIRST_COMPLETED,
-                            )
-                            for task in pending:
-                                task.cancel()
-                            if pending:
-                                await asyncio.gather(
-                                    *pending,
-                                    return_exceptions=True,
-                                )
-                            if stop_task in done:
+                            if stop_task in done or lost_task in done:
                                 break
                 except Exception:
                     print(f"Error in outgoing processor: {traceback.format_exc()}")
-                    session.request_stop()
+                    connection_lost_event.set()
 
             async def keepalive():
                 try:
-                    while not session.stop_event.is_set():
+                    while (
+                        not session.stop_event.is_set()
+                        and not connection_lost_event.is_set()
+                    ):
                         if websocket.client_state != WebSocketState.DISCONNECTED:
                             await websocket.send_json(
                                 {
                                     "type": "heartbeat",
-                                    "peer_id": "server",
                                 }
                             )
                         await session.outbound_message_queue.put(
@@ -848,21 +901,16 @@ class Web:
                                 "data": {},
                             }
                         )
-                        try:
-                            await asyncio.wait_for(
-                                session.stop_event.wait(),
-                                timeout=15,
-                            )
-                        except asyncio.TimeoutError:
-                            pass
+                        done, _ = await wait_first(
+                            session.stop_event.wait(),
+                            connection_lost_event.wait(),
+                            timeout=15,
+                        )
+                        if done:
+                            break
                 except Exception:
                     print(f"Error in keepalive: {traceback.format_exc()}")
-                    session.request_stop()
-
-            async def prepare_for_next_game(*, preserve_frame: bool = True):
-                if not preserve_frame:
-                    video_track.reset()
-                await session.prepare_for_next_game()
+                    connection_lost_event.set()
 
             async def fail_current_game(message: str):
                 try:
@@ -893,7 +941,7 @@ class Web:
 
             async def wait_for_models(model_ready_task, *, show_loading: bool) -> bool:
                 if show_loading and not model_ready_task.done():
-                    await video_track.wait_for_phase_frames()
+                    await session.frame_buffer.wait_for_phase_frames()
                     await show_models_loading()
                 try:
                     await model_ready_task
@@ -929,7 +977,7 @@ class Web:
                     phase_edge_armed = False
                     generation = phase_generation
                     event_loop.call_soon_threadsafe(begin_non_fight_phase, generation)
-                video_track.queue_frame(np.ascontiguousarray(frame))
+                session.frame_buffer.queue_frame(np.ascontiguousarray(frame))
 
             def send_presentation(name: str, **fields):
                 event_loop.call_soon_threadsafe(
@@ -997,6 +1045,8 @@ class Web:
             async def run_robot_background():
                 try:
                     while not session.stop_event.is_set():
+                        if not await session.wait_for_connection():
+                            break
                         await asyncio.sleep(0.001)
 
                         if (
@@ -1146,9 +1196,11 @@ class Web:
 
             async def run_game_loop():
                 nonlocal phase_edge_armed, phase_generation
-                frame_interval = 1.0 / video_track.target_fps
+                frame_interval = 1.0 / session.frame_buffer.target_fps
 
                 async def pace_frame(last_frame_at):
+                    if not await session.wait_for_connection():
+                        return None
                     if last_frame_at is not None:
                         deadline = last_frame_at + frame_interval
                         while (
@@ -1159,8 +1211,12 @@ class Web:
 
                 try:
                     while not session.stop_event.is_set():
+                        if not await session.wait_for_connection():
+                            break
                         await session.cleanup_environment()
-                        stream_pregame_frames = video_track.latest_frame is None
+                        stream_pregame_frames = (
+                            session.frame_buffer.latest_frame is None
+                        )
                         pregame_frame_sink = (
                             stream_phase_frame if stream_pregame_frames else None
                         )
@@ -1180,7 +1236,9 @@ class Web:
 
                         initial_frame = raw.get("frame")
                         if stream_pregame_frames and initial_frame is not None:
-                            video_track.set_frame(np.ascontiguousarray(initial_frame))
+                            session.frame_buffer.set_frame(
+                                np.ascontiguousarray(initial_frame)
+                            )
 
                         session.game_state["status"] = "pregame"
                         session.game_state["winner"] = ""
@@ -1196,6 +1254,8 @@ class Web:
                             and not session.stop_event.is_set()
                         ):
                             last_frame_at = await pace_frame(last_frame_at)
+                            if session.stop_event.is_set():
+                                break
                             try:
                                 raw = await session.run_env_operation(
                                     session.env.pregame_step,
@@ -1213,7 +1273,9 @@ class Web:
                             }
                             frame = session.observation.get("frame")
                             if stream_pregame_frames and frame is not None:
-                                video_track.set_frame(np.ascontiguousarray(frame))
+                                session.frame_buffer.set_frame(
+                                    np.ascontiguousarray(frame)
+                                )
 
                         if session.stop_event.is_set():
                             break
@@ -1230,7 +1292,7 @@ class Web:
                             )
                         )
                         models_loading_delay_frames = max(
-                            1, round(video_track.target_fps)
+                            1, round(session.frame_buffer.target_fps)
                         )
                         models_loading_frames_remaining = None
                         models_ready_checked = False
@@ -1256,10 +1318,10 @@ class Web:
                             await fail_current_game(format_runtime_error(e))
                             return
 
-                        await video_track.wait_for_phase_frames()
+                        await session.frame_buffer.wait_for_phase_frames()
                         frame = session.observation.get("frame")
                         if frame is not None:
-                            video_track.set_frame(np.ascontiguousarray(frame))
+                            session.frame_buffer.set_frame(np.ascontiguousarray(frame))
 
                         session.accepts_input = True
                         session.game_state["status"] = "selecting"
@@ -1268,6 +1330,8 @@ class Web:
                         last_frame_at = None
                         while session.game_running and not session.stop_event.is_set():
                             last_frame_at = await pace_frame(last_frame_at)
+                            if session.stop_event.is_set():
+                                break
 
                             selecting = bool(
                                 session.info and session.info.get("selecting")
@@ -1311,7 +1375,9 @@ class Web:
 
                             frame = session.observation.get("frame")
                             if frame is not None:
-                                video_track.set_frame(np.ascontiguousarray(frame))
+                                session.frame_buffer.set_frame(
+                                    np.ascontiguousarray(frame)
+                                )
 
                             selection_changed = False
                             if selecting:
@@ -1383,7 +1449,7 @@ class Web:
 
                             if session.info.get("game_done", False):
                                 if terminated or truncated:
-                                    await video_track.wait_for_phase_frames()
+                                    await session.frame_buffer.wait_for_phase_frames()
                                     session.accepts_input = False
                                     session.invalidate_actions()
                                     p1_wins = session.observation["P1"]["wins"][0]
@@ -1431,64 +1497,91 @@ class Web:
 
                         if session.stop_event.is_set():
                             break
-                        await prepare_for_next_game(preserve_frame=True)
+                        await session.prepare_for_next_game()
 
                 except Exception:
                     print(f"Error in game loop: {traceback.format_exc()}")
                     session.request_stop()
 
-            await session.send_game_state()
+            if session.runtime_task is None:
+
+                async def run_runtime():
+                    tasks = [
+                        asyncio.create_task(run_robot_background()),
+                        asyncio.create_task(run_game_loop()),
+                    ]
+                    try:
+                        done, _ = await asyncio.wait(
+                            tasks,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        for task in done:
+                            task.result()
+                    except Exception as exc:
+                        print(f"Game runtime error: {exc}")
+                    finally:
+                        session.request_stop()
+                        session.game_running = False
+                        if session.expiry_handle is not None:
+                            session.expiry_handle.cancel()
+                            session.expiry_handle = None
+                        _, pending_tasks = await asyncio.wait(
+                            tasks,
+                            timeout=SESSION_TASK_SHUTDOWN_TIMEOUT_SECONDS,
+                        )
+                        for task in pending_tasks:
+                            task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                        await session.cleanup()
+                        if self.game_sessions.get(game_id) is session:
+                            self.game_sessions.pop(game_id, None)
+
+                if creating_session:
+                    session.runtime_task = asyncio.create_task(run_runtime())
+                    self.game_sessions[game_id] = session
+
             tasks = [
                 asyncio.create_task(process_signaling_messages()),
                 asyncio.create_task(process_control_messages()),
                 asyncio.create_task(process_outbound_messages()),
                 asyncio.create_task(keepalive()),
-                asyncio.create_task(run_robot_background()),
-                asyncio.create_task(run_game_loop()),
             ]
             stop_waiter = asyncio.create_task(session.stop_event.wait())
+            lost_waiter = asyncio.create_task(connection_lost_event.wait())
+            waiters = [stop_waiter, lost_waiter]
 
             try:
                 done, _ = await asyncio.wait(
-                    {*tasks, stop_waiter},
+                    {*tasks, *waiters},
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 for task in done:
-                    if task is not stop_waiter:
+                    if task in tasks:
                         task.result()
             except WebSocketDisconnect:
-                session.request_stop()
-                session.game_running = False
-            except Exception as e:
-                print(f"WebSocket error: {e}")
-                session.request_stop()
-                session.game_running = False
-                session.game_state["status"] = "error"
-                session.game_state["error"] = str(e)
-                try:
-                    await session.send_game_state()
-                except Exception:
-                    print("Warning: could not send error message")
+                connection_lost_event.set()
+            except Exception as exc:
+                print(f"WebSocket connection error: {exc}")
+                connection_lost_event.set()
             finally:
-                session.request_stop()
-                session.game_running = False
-                _, pending_tasks = await asyncio.wait(
-                    tasks,
-                    timeout=SESSION_TASK_SHUTDOWN_TIMEOUT_SECONDS,
-                )
-                for task in pending_tasks:
-                    task.cancel()
-                stop_waiter.cancel()
-                await asyncio.gather(
-                    *tasks,
-                    stop_waiter,
-                    return_exceptions=True,
-                )
-                await pc.close()
-                await session.cleanup()
+                for task in (*tasks, *waiters):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, *waiters, return_exceptions=True)
+                try:
+                    await pc.close()
+                finally:
+                    if session.detach_connection(connection_lost_event):
+                        if not session.stop_event.is_set():
+                            session.expiry_handle = (
+                                asyncio.get_running_loop().call_later(
+                                    GAMEPLAY_SESSION_IDLE_TIMEOUT_SECONDS,
+                                    session.request_stop,
+                                )
+                            )
 
         @web_app.websocket("/ws")
-        async def websocket_missing_peer_id(websocket: WebSocket):
+        async def websocket_missing_game_id(websocket: WebSocket):
             await websocket.close(code=1008)
 
         @web_app.get("/api/extra-moves")
@@ -1498,158 +1591,85 @@ class Web:
                 headers={"Cache-Control": "public, max-age=300"},
             )
 
+        no_cache_header = "no-store, max-age=0"
+        no_cache_suffixes = (".html", ".js", ".css")
+        frontend_root = Path(remote_frontend_dir).resolve()
+
+        @web_app.get("/api/launcher-url")
+        async def launcher_url():
+            return JSONResponse(
+                {"url": await launcher.get_web_url.aio()},
+                headers={"Cache-Control": no_cache_header},
+            )
+
+        @web_app.get("/favicon.ico")
+        async def favicon():
+            return FileResponse(
+                f"{remote_logos_dir}/mobile.webp",
+                media_type="image/webp",
+            )
+
+        web_app.mount("/icons", StaticFiles(directory=remote_icons_dir), name="icons")
+        web_app.mount("/logos", StaticFiles(directory=remote_logos_dir), name="logos")
+        web_app.mount(
+            "/sounds", StaticFiles(directory=remote_sounds_dir), name="sounds"
+        )
+
+        def frontend_file_response(frontend_path: str):
+            path = (frontend_root / frontend_path).resolve()
+            if not path.is_relative_to(frontend_root):
+                return Response(status_code=404)
+            if not path.is_file():
+                return Response(status_code=404)
+            cache_header = (
+                no_cache_header
+                if path.suffix.lower() in no_cache_suffixes
+                else "public, max-age=31536000, immutable"
+            )
+            return FileResponse(path, headers={"Cache-Control": cache_header})
+
+        @web_app.get("/")
+        async def index():
+            return frontend_file_response("index.html")
+
+        @web_app.get("/{frontend_path:path}")
+        async def frontend_file(frontend_path: str):
+            return frontend_file_response(frontend_path)
+
         return web_app
 
 
-_deployed_gameplay_base_url: str | None = None
-
-
-def _warm_deployed_gameplay_base_url() -> str:
-    global _deployed_gameplay_base_url
-    if _deployed_gameplay_base_url is not None:
-        return _deployed_gameplay_base_url
-
-    try:
-        web_server_cls = modal.Cls.from_name("sf3", "Web")()
-        url = web_server_cls.app.get_web_url()
-        if url:
-            _deployed_gameplay_base_url = url.rstrip("/")
-            return _deployed_gameplay_base_url
-    except Exception as exc:
-        print(f"resolve_gameplay_base_url: deployed lookup: {exc}")
-
-    return ""
-
-
-def resolve_gameplay_base_url(
-    static_base_url: str,
-    *,
-    deployed_base_url: str | None = None,
-) -> str:
-    static_base_url = static_base_url.rstrip("/")
-    if static_base_url:
-        try:
-            parsed = urlsplit(static_base_url)
-            netloc = parsed.netloc
-            for static_suffix, gameplay_suffix in (
-                ("--sf3-dev.modal.run", f"--gameplay-dev.{ROUTING_REGION}.modal.run"),
-                ("--sf3.modal.run", f"--gameplay.{ROUTING_REGION}.modal.run"),
-            ):
-                if netloc.endswith(static_suffix):
-                    return urlunsplit(
-                        (
-                            parsed.scheme,
-                            netloc[: -len(static_suffix)] + gameplay_suffix,
-                            "",
-                            "",
-                            "",
-                        )
-                    )
-        except ValueError:
-            pass
-
-    if deployed_base_url is not None:
-        return deployed_base_url
-
-    return _deployed_gameplay_base_url or ""
-
-
 @app.function(
-    image=static_image,
+    image=launcher_image,
     region=CONTAINER_REGION,
     min_containers=1,
-    timeout=24 * 60 * MINUTES,
 )
 @modal.concurrent(max_inputs=96, target_inputs=64)
 @modal.asgi_app(label="sf3", custom_domains=["sf3.modal.dev"])
-def static_site():
-    import json
+def launcher():
+    from urllib.parse import urlencode
 
-    from fastapi import FastAPI, Request, WebSocket
-    from fastapi.responses import FileResponse, Response
-    from fastapi.staticfiles import StaticFiles
+    from fastapi import FastAPI, Request
+    from fastapi.responses import RedirectResponse, Response
 
-    @asynccontextmanager
-    async def lifespan(web_app: FastAPI):
-        web_app.state.deployed_gameplay_base_url = await asyncio.to_thread(
-            _warm_deployed_gameplay_base_url
-        )
-        yield
-
-    web_app = FastAPI(lifespan=lifespan)
-    no_cache_header = "no-store, max-age=0"
-    no_cache_suffixes = (".html", ".js", ".css")
-    frontend_root = Path(remote_frontend_dir).resolve()
-
-    def is_no_cache_path(path: str) -> bool:
-        return (
-            path == "/"
-            or path == "/runtime-config.js"
-            or path.endswith(no_cache_suffixes)
-        )
-
-    @web_app.middleware("http")
-    async def add_static_cache_headers(request: Request, call_next):
-        response = await call_next(request)
-        if is_no_cache_path(request.url.path):
-            response.headers["Cache-Control"] = no_cache_header
-        return response
-
-    @web_app.get("/runtime-config.js")
-    async def runtime_config(request: Request):
-        gameplay_base_url = resolve_gameplay_base_url(
-            str(request.base_url),
-            deployed_base_url=request.app.state.deployed_gameplay_base_url or "",
-        )
-        body = (
-            "window.__SF3_CONFIG__ = "
-            + json.dumps({"gameplayBaseUrl": gameplay_base_url})
-            + ";"
-        )
-        return Response(
-            body,
-            media_type="application/javascript",
-            headers={"Cache-Control": no_cache_header},
-        )
-
-    @web_app.websocket("/ws")
-    async def wrong_websocket_host(websocket: WebSocket):
-        await websocket.close(code=1013, reason="Connect to gameplay host")
-
-    @web_app.websocket("/ws/{path:path}")
-    async def wrong_websocket_host_path(websocket: WebSocket, path: str):
-        await websocket.close(code=1013, reason="Connect to gameplay host")
-
-    @web_app.get("/favicon.ico")
-    async def favicon():
-        return FileResponse(
-            f"{remote_logos_dir}/mobile.webp",
-            media_type="image/webp",
-        )
-
-    web_app.mount("/icons", StaticFiles(directory=remote_icons_dir), name="icons")
-    web_app.mount("/logos", StaticFiles(directory=remote_logos_dir), name="logos")
-    web_app.mount("/sounds", StaticFiles(directory=remote_sounds_dir), name="sounds")
-
-    def frontend_file_response(frontend_path: str):
-        path = (frontend_root / frontend_path).resolve()
-        if not path.is_relative_to(frontend_root):
-            return Response(status_code=404)
-        if not path.is_file():
-            return Response(status_code=404)
-        cache_header = (
-            no_cache_header
-            if path.suffix.lower() in no_cache_suffixes
-            else "public, max-age=31536000, immutable"
-        )
-        return FileResponse(path, headers={"Cache-Control": cache_header})
+    web_app = FastAPI()
 
     @web_app.get("/")
-    async def index():
-        return frontend_file_response("index.html")
-
-    @web_app.get("/{frontend_path:path}")
-    async def frontend_file(frontend_path: str):
-        return frontend_file_response(frontend_path)
+    async def start_session(request: Request):
+        if (
+            request.headers.get("sec-purpose") is not None
+            or request.headers.get("sec-fetch-mode", "navigate") != "navigate"
+        ):
+            return Response(status_code=204)
+        session = await Web.sessions.start.aio(
+            idle_timeout=GAMEPLAY_SESSION_IDLE_TIMEOUT_SECONDS
+        )
+        gameplay_url = (await Web.get_url.aio()).rstrip("/")
+        query = urlencode({"modal_session_token": session.token})
+        return RedirectResponse(
+            f"{gameplay_url}/?{query}",
+            status_code=303,
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
 
     return web_app

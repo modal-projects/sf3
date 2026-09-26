@@ -506,11 +506,25 @@ const createGameController = () => {
   };
 
   const handleGameState = (data) => {
-    GameState.update({ gamePhase: data.status });
+    const participantsAreAuthoritative = !["initializing", "pregame"].includes(
+      data.status
+    );
+    GameState.update({
+      gamePhase: data.status,
+      ...(participantsAreAuthoritative
+        ? {
+            player1Participant: data.player1_participant,
+            player2Participant: data.player2_participant,
+          }
+        : {}),
+    });
     switch (data.status) {
       case "initializing":
         setText("loading-status", "Starting game...");
         playLobbyMusic();
+        if (GameState.getCurrentScreen() === null) {
+          ScreenManager.showScreen(ScreenManager.screens.LOBBY);
+        }
         break;
 
       case "pregame": {
@@ -581,19 +595,16 @@ const createGameController = () => {
         break;
 
       case "transitioning":
-        GameState.update({
-          loaded: true,
-          acceptsInput: false,
-          keyState: {},
-        });
         setCanvasLoading(false);
-        GamepadManager.setUIActive(true);
-        GamepadUINavigator.updateGamepadSections(true);
+        enterLiveShell({ acceptsInput: false, uiActive: true });
         break;
 
       case "running": {
         const state = GameState.get();
         const identity = data.match_identity;
+        const resumedMatch =
+          currentAudioOwner?.scene !== "gameplay" &&
+          !overlayStings.has(currentAudioOwner?.scene);
         if (state.currentScreen !== ScreenManager.screens.GAME) {
           ScreenManager.showScreen(ScreenManager.screens.GAME);
         }
@@ -614,6 +625,13 @@ const createGameController = () => {
         setCanvasSize();
         setCanvasLoading(false);
         restartVideoRendering();
+        if (resumedMatch && identity) {
+          playGameplayMusic({
+            player1: identity.player1,
+            player2: identity.player2,
+            round_number: data.round_number,
+          });
+        }
         GamepadManager.setUIActive(!hasHumanParticipant(state));
         GamepadUINavigator.updateGamepadSections(true);
         break;
@@ -621,9 +639,13 @@ const createGameController = () => {
 
       case "finished":
         GameState.update({
+          loaded: true,
           acceptsInput: false,
           keyState: {},
         });
+        ScreenManager.showScreen(ScreenManager.screens.GAME);
+        setCanvasSize();
+        restartVideoRendering();
         endFlow = "ending";
         pendingFinishedState = data;
         revealReplayIfReady();
@@ -710,9 +732,15 @@ const createGameController = () => {
 
     const errorBackBtn = byId("error-back-btn");
     if (errorBackBtn) {
-      errorBackBtn.addEventListener("click", () => {
+      errorBackBtn.addEventListener("click", async () => {
         AudioManager.playSound(SOUND_KEYS.CLICK);
-        window.location.reload();
+        WebRtcManager.clearStoredGameId();
+        const launcherUrl = await WebRtcManager.getLauncherUrl();
+        if (launcherUrl) {
+          window.location.assign(launcherUrl);
+        } else {
+          window.location.reload();
+        }
       });
     }
     playLobbyMusic();
