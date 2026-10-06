@@ -2094,7 +2094,7 @@ def create_random_messages() -> tuple[list[dict], str, int, int, int, list[str]]
 
 MAX_CONTEXT_LEN = 2048
 MAX_TOKENS = 14  # "Max-2 EX Yagyou Dama (3 bars)" = 13 toks + 1 for Gemma JSON quotes
-TEMPERATURE = 0.7
+TEMPERATURE = 1.0
 TOP_P = 0.8
 
 

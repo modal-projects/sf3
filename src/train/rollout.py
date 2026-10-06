@@ -2,6 +2,7 @@ import asyncio
 import random
 import traceback
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from itertools import zip_longest
 
 from modal_dojo import Qwen3_VL_8B
@@ -9,10 +10,11 @@ from modal_dojo import Qwen3_VL_8B
 from src.env import EnvironmentConfig, create_environment
 from src.utils import (
     CHARACTER_MAPPING,
+    HEALTH_MAX,
+    MAX_CPU_DIFFICULTY,
     RECENT_MOVE_LIMIT,
     FrameEncoder,
     create_messages,
-    move_regex,
     player_state,
     resolve_move_with_fallback,
 )
@@ -20,10 +22,18 @@ from src.utils import (
 MODEL = Qwen3_VL_8B()
 ROSTER = tuple(CHARACTER_MAPPING.values())
 OUTFIT = SUPER_ART = 1
-REWARDS = {"P1": (1.0, -1.0), "P2": (-1.0, 1.0), "draw": (0.0, 0.0)}
 FRAME_KEY = "sf3_frame"
 IMAGE_PAD = "<|image_pad|>"
 
+GAMMA = 0.9
+INVALID_MOVE_PENALTY = 20 / HEALTH_MAX
+CPU_FRACTION = 0.5
+MIN_CPU_RESULTS = 10
+
+_cpu_results = {
+    difficulty: deque(maxlen=50) for difficulty in range(1, MAX_CPU_DIFFICULTY + 1)
+}
+_executor = ThreadPoolExecutor(max_workers=256)
 _fights: dict[tuple[int, int], asyncio.Task] = {}
 _image_tokens_by_frame_size: dict[tuple[int, int], int] = {}
 
@@ -74,7 +84,7 @@ async def _move(
         {
             "text": prompt_text,
             "image_data": [frame],
-            "sampling_params": {**sampling_params, "regex": move_regex(available)},
+            "sampling_params": sampling_params,
             "return_logprob": True,
         },
     )
@@ -91,11 +101,35 @@ async def _move(
     )
     if move.status == Sample.Status.ABORTED:
         raise RuntimeError("SGLang aborted a move")
-    return move
+    return move, available
+
+
+def _cpu_win_rate(results):
+    return (sum(results) + 1) / (len(results) + 2)
+
+
+def _sample_cpu_difficulty():
+    # PFSP-style: https://www.nature.com/articles/s41586-019-1724-z
+    hardest_won = max(
+        (
+            d
+            for d, r in _cpu_results.items()
+            if len(r) >= MIN_CPU_RESULTS and _cpu_win_rate(r) >= 0.5
+        ),
+        default=0,
+    )
+    levels = range(1, min(hardest_won + 1, MAX_CPU_DIFFICULTY) + 1)
+    rates = [_cpu_win_rate(_cpu_results[d]) for d in levels]
+    return random.choices(levels, [p * (1 - p) for p in rates])[0]
 
 
 async def _play_fight(args, sample, sampling_params):
-    characters = random.Random(sample.group_index).sample(ROSTER, 2)
+    vs_cpu = sample.group_index % args.rollout_batch_size < round(
+        CPU_FRACTION * args.rollout_batch_size
+    )
+    difficulty = _sample_cpu_difficulty() if vs_cpu else MAX_CPU_DIFFICULTY
+    seats = (0,) if vs_cpu else (0, 1)
+    characters = random.sample(ROSTER, 2)
     identities = [{"character": c, "superArt": SUPER_ART} for c in characters]
     env = await asyncio.to_thread(
         create_environment,
@@ -104,13 +138,18 @@ async def _play_fight(args, sample, sampling_params):
             outfits=(OUTFIT, OUTFIT),
             super_arts=(SUPER_ART, SUPER_ART),
             step_ratio=6,
+            vs_cpu=vs_cpu,
+            cpu_difficulty=difficulty,
         ),
     )
     try:
         observation, _ = await asyncio.to_thread(env.reset)
+        if vs_cpu:
+            identities = list(env.read_match_identity().values())
         encoder = FrameEncoder()
         recent = [deque(maxlen=RECENT_MOVE_LIMIT), deque(maxlen=RECENT_MOVE_LIMIT)]
-        moves = [[], []]
+        moves, invalid = [[], []], [[], []]
+        damage, rounds, round_index = [], [], 0
         while True:
             fighters = [
                 player_state(observation, identities[seat], f"P{seat + 1}")
@@ -131,36 +170,65 @@ async def _play_fight(args, sample, sampling_params):
                         frame_size,
                         recent,
                     )
-                    for seat in range(2)
+                    for seat in seats
                 )
             )
-            buttons = []
-            for seat, move in enumerate(turn):
+            buttons = [[], []]
+            for seat, (move, available) in zip(seats, turn):
                 moves[seat].append(move)
+                name = MODEL.parse_response(move.response).content.strip()
+                invalid[seat].append(name not in available)
                 move_buttons, move_name = resolve_move_with_fallback(
                     characters[seat],
-                    MODEL.parse_response(move.response).content,
+                    name if name in available else "No-Move",
                     fighters[seat].side,
                 )
                 recent[seat].append(move_name)
-                buttons.append(move_buttons)
+                buttons[seat] = move_buttons
+            turn_damage = 0.0
             for p1_button, p2_button in zip_longest(*buttons, fillvalue=0):
-                observation, _, terminated, _, info = await asyncio.to_thread(
+                observation, step_damage, terminated, _, info = await asyncio.to_thread(
                     env.step, {"agent_0": p1_button, "agent_1": p2_button}
                 )
+                turn_damage += step_damage
                 if terminated or info["round_done"]:
                     break
+            damage.append(turn_damage)
+            rounds.append(round_index)
             if info["round_done"]:
+                round_index += 1
                 for seat_recent in recent:
                     seat_recent.clear()
-            if terminated:
+            if terminated or info["stage_done"]:
                 break
     finally:
         await asyncio.to_thread(env.close)
-    for seat_moves, reward in zip(moves, REWARDS[info["winner"]]):
-        for move in seat_moves:
-            move.reward = reward
-    return moves
+    if vs_cpu:
+        results = _cpu_results[difficulty]
+        results.append(info["stage_done"] or info["winner"] == "P1")
+        print(f"cpu {difficulty}: {_cpu_win_rate(results):.2f} over {len(results)}")
+    returns, G = [0.0] * len(damage), 0.0
+    for t in reversed(range(len(damage))):
+        if t + 1 < len(damage) and rounds[t + 1] != rounds[t]:
+            G = 0.0
+        G = damage[t] + GAMMA * G
+        returns[t] = G / HEALTH_MAX
+    for seat_moves, seat_invalid, sign in zip(moves, invalid, (1, -1)):
+        for move, bad, G in zip(seat_moves, seat_invalid, returns):
+            move.reward = sign * G - INVALID_MOVE_PENALTY * bad
+    # slime's static batching needs every step's sample count divisible by
+    # DP * micro_batch_size.
+    gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
+    align = gpus * args.micro_batch_size // len(seats)
+    keep = sorted(random.sample(range(len(damage)), len(damage) // align * align))
+    if not keep:
+        raise RuntimeError("fight too short to align with DP * micro_batch_size")
+    if not vs_cpu:
+        return [[seat_moves[t] for t in keep] for seat_moves in moves]
+    kept = [moves[0][t] for t in keep]
+    for move in kept[1::2]:
+        move.index = move.rollout_id = move.index + 1
+    return [kept[0::2], kept[1::2]]
 
 
 async def sf3_generate(args, sample, sampling_params):
@@ -169,6 +237,7 @@ async def sf3_generate(args, sample, sampling_params):
     key = (sample.group_index, sample.index // 2)
     fight = _fights.pop(key, None)
     if fight is None:
+        asyncio.get_running_loop().set_default_executor(_executor)
         fight = _fights[key] = asyncio.create_task(
             _play_fight(args, sample, sampling_params)
         )
