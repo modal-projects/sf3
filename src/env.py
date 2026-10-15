@@ -167,8 +167,8 @@ def _cpu_difficulty_steps(frame_ratio: int, difficulty: int):
         (10, (jab,)),
     ]
     level = arcade_level(difficulty)
-    direction = Actions.P1_LEFT if level < 3 else Actions.P1_RIGHT
-    entries.extend((10, (direction,)) for _ in range(abs(level - 3)))
+    direction = Actions.P1_LEFT if level < 2 else Actions.P1_RIGHT
+    entries.extend((10, (direction,)) for _ in range(abs(level - 2)))
     tail = [down] * 6 + [jab, down, jab, down, down, jab, down, down, down, jab]
     entries.extend((10, (action,)) for action in tail)
     return _menu_steps(frame_ratio, entries)
