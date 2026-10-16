@@ -212,6 +212,49 @@ def _action_values(player: int, action_id: int):
     return [getattr(Actions, f"{prefix}_{name}").value for name in action_names]
 
 
+def _setup_frame_access_loop(emu) -> None:
+    fighting = emu.memory_addresses["fighting"].get_lua_string()
+    emu.console.writeln(
+        "frameQueue = {}; function pipeData() "
+        f"if (math.fmod(tonumber(s:frame_number()), {emu.frame_ratio}) == 0) then "
+        "for i=1,#releaseQueue do releaseQueue[i](); releaseQueue[i]=nil; end; "
+        f"if (#frameQueue > 0 and {fighting} ~= 0) then "
+        "actions = table.remove(frameQueue, 1); "
+        "else "
+        "frameQueue = {}; "
+        f"{emu.dataPipe.get_lua_string()}"
+        f"actions = {emu.actionPipe.get_lua_string()}"
+        'if (string.find(actions, "|", 1, true)) then '
+        'for frame in string.gmatch(actions, "([^|]*)|") do '
+        "table.insert(frameQueue, frame); end; "
+        "actions = table.remove(frameQueue, 1); "
+        "end; "
+        "end; "
+        "if (string.len(actions) > 1) then "
+        'for action in string.gmatch(actions, "[^+]+") do '
+        'actionFunc = loadstring(action..":set_value(1)"); actionFunc(); '
+        'releaseFunc = loadstring(action..":set_value(0)"); '
+        "table.insert(releaseQueue, releaseFunc); "
+        "end; end; end; end"
+    )
+    emu.console.writeln('emu.register_frame(pipeData, "data")')
+
+
+def _play_frames(emu, frames: Sequence[list[Any]]) -> dict[str, Any]:
+    if emu.first:
+        emu.dataPipe.read_data(timeout=10)
+        emu.first = False
+    emu.actionPipe.writeln(
+        "".join("+".join(a.get_lua_string() for a in frame) + "|" for frame in frames)
+    )
+    return emu.dataPipe.read_data(timeout=10)
+
+
+class _FrameNumber:
+    def get_lua_string(self) -> str:
+        return "s:frame_number()"
+
+
 @dataclass(frozen=True)
 class EnvironmentConfig:
     characters: tuple[str, str]
@@ -223,6 +266,7 @@ class EnvironmentConfig:
     env_id: str | None = None
     vs_cpu: bool = False
     cpu_difficulty: int = 8
+    lock_cpu_opponent: bool = True
     interactive_select: bool = False
 
     def resolved_env_id(self) -> str:
@@ -273,6 +317,10 @@ class GameEnvironment(Protocol):
         self,
         actions: dict[str, int],
         frame_sink: FrameSink | None = None,
+    ) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]: ...
+
+    def step_frames(
+        self, frames: Sequence[dict[str, int]]
     ) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]: ...
 
     def read_match_identity(self) -> dict[str, dict[str, Any]]: ...
@@ -337,13 +385,14 @@ class LocalSfiiiAdapter:
         }
 
         self.emu = Emulator.__new__(Emulator)
+        self.emu.setup_frame_access_loop = lambda: _setup_frame_access_loop(self.emu)
         try:
             Emulator.__init__(
                 self.emu,
                 config.resolved_env_id(),
                 config.roms_path,
                 "sfiii3n",
-                self.memory_addresses,
+                {"frameNumber": _FrameNumber(), **self.memory_addresses},
                 frame_ratio=config.step_ratio,
                 render=config.render_mode == "human",
                 throttle=False,
@@ -455,13 +504,28 @@ class LocalSfiiiAdapter:
     ) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
         if self._selecting:
             return self._step_select(actions, frame_sink)
+        return self._finish_step(self._sub_step(self._pressed(actions)), frame_sink)
 
+    def step_frames(
+        self, frames: Sequence[dict[str, int]]
+    ) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
+        """Plays all frames in one MAME round trip, stopping early at a round end."""
+        pressed = [self._pressed(actions) for actions in frames]
+        return self._finish_step(self._sub_step(pressed, frames=True), None)
+
+    def _pressed(self, actions: dict[str, int]) -> list[Any]:
         pressed = _action_values(1, actions.get("agent_0", 0))
         if not self._vs_cpu:
             pressed = pressed + _action_values(2, actions.get("agent_1", 0))
-        raw = self._sub_step(pressed)
+        return pressed
+
+    def _finish_step(
+        self, raw: dict[str, Any], frame_sink: FrameSink | None
+    ) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
+        frames = int(raw["frameNumber"]) - int(self._data["frameNumber"])
         reward = float(raw["reward"])
         round_done = False
+        round_winner = None
         stage_done = False
         game_done = False
         winner = None
@@ -470,9 +534,19 @@ class LocalSfiiiAdapter:
             # Equal health at the fighting edge is time-over or double KO.
             if int(raw["healthP1"]) == int(raw["healthP2"]):
                 self._emit_presentation("judgement")
+            previous_wins = dict(self.expected_wins)
             raw = self._run_till_victor(raw, frame_sink)
             reward = float(raw["reward"])
             round_done = True
+            p1_won_round = int(raw["winsP1"]) > previous_wins["P1"]
+            p2_won_round = int(raw["winsP2"]) > previous_wins["P2"]
+            round_winner = (
+                "draw"
+                if p1_won_round == p2_won_round
+                else "P1"
+                if p1_won_round
+                else "P2"
+            )
             p1_won_match = int(raw["winsP1"]) >= 2
             p2_won_match = int(raw["winsP2"]) >= 2
             tournament_mode = self._vs_cpu
@@ -481,7 +555,12 @@ class LocalSfiiiAdapter:
                 and p1_won_match
                 and int(raw["characterP2"]) == CHARACTER_NAME_TO_LOCAL_ID["Gill"]
             )
-            stage_done = tournament_mode and p1_won_match and not tournament_won
+            stage_done = (
+                tournament_mode
+                and p1_won_match
+                and not p2_won_match
+                and not tournament_won
+            )
             game_done = (
                 p2_won_match or tournament_won
                 if tournament_mode
@@ -516,11 +595,15 @@ class LocalSfiiiAdapter:
                 self._data = self._wait_for_fight_start(frame_sink)
                 self._data["reward"] = reward
             else:
-                self._data = self._stream_terminal_sequence(
-                    raw,
-                    frame_sink,
-                    tournament_won=tournament_won,
-                    winner=winner,
+                self._data = (
+                    self._stream_terminal_sequence(
+                        raw,
+                        frame_sink,
+                        tournament_won=tournament_won,
+                        winner=winner,
+                    )
+                    if frame_sink is not None
+                    else raw
                 )
                 self._data["reward"] = reward
         else:
@@ -530,9 +613,11 @@ class LocalSfiiiAdapter:
         info = {
             "game_done": game_done,
             "round_done": round_done,
+            "round_winner": round_winner,
             "stage_done": stage_done,
             "selecting": False,
             "winner": winner,
+            "frames": frames,
         }
         return observation, reward, game_done, False, info
 
@@ -645,6 +730,7 @@ class LocalSfiiiAdapter:
                 CHARACTER_NAME_TO_LOCAL_ID[character],
             )
             for player, character in enumerate(self.config.characters, start=1)
+            if player == 1 or not self._vs_cpu or self.config.lock_cpu_opponent
         )
 
     def _matchup_lock_command(self) -> str:
@@ -992,9 +1078,9 @@ class LocalSfiiiAdapter:
         self._select_characters(frame_sink)
         self._data = self._wait_for_fight_start(frame_sink)
 
-    def _sub_step(self, actions: list[Any]) -> dict[str, Any]:
+    def _sub_step(self, actions: list[Any], *, frames: bool = False) -> dict[str, Any]:
         self._raise_if_stopping()
-        data = self.emu.step(actions)
+        data = _play_frames(self.emu, actions) if frames else self.emu.step(actions)
 
         p1_diff = self.expected_health["P1"] - int(data["healthP1"])
         p2_diff = self.expected_health["P2"] - int(data["healthP2"])

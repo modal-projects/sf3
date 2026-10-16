@@ -1,4 +1,5 @@
 import base64
+import math
 import os
 import random
 import re
@@ -69,6 +70,18 @@ PARTICIPANT_LABELS = {
 DEFAULT_PLAYER1_PARTICIPANT = "human"
 DEFAULT_PLAYER2_PARTICIPANT = "qwen35_9b"
 MAX_CPU_DIFFICULTY = 8
+
+
+def model_reaction_delay_ms(n_buttons: int, generation_ms: float) -> float:
+    if n_buttons < 1:
+        return generation_ms
+    human_ms = 100.0 + 30.0 * (n_buttons - 1)
+    playback_ms = (n_buttons - 1) * (1000.0 / 60.0)
+    return max(generation_ms, human_ms - playback_ms)
+
+
+def model_reaction_frames(n_buttons: int, generation_ms: float) -> int:
+    return math.ceil(model_reaction_delay_ms(n_buttons, generation_ms) * 60 / 1000)
 
 
 def is_model_participant(participant: str) -> bool:

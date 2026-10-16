@@ -15,9 +15,9 @@ from src.serve import MODELS
 from src.utils import (
     COMBOS,
     CONTAINER_REGION,
-    MAX_CPU_DIFFICULTY,
     DEFAULT_PLAYER1_PARTICIPANT,
     DEFAULT_PLAYER2_PARTICIPANT,
+    MAX_CPU_DIFFICULTY,
     MINUTES,
     PARTICIPANT_LABELS,
     RECENT_MOVE_LIMIT,
@@ -27,6 +27,7 @@ from src.utils import (
     create_gameplay_image,
     generate_move,
     is_model_participant,
+    model_reaction_delay_ms,
     normalize_game_participants,
     player_state,
 )
@@ -989,11 +990,7 @@ class Web:
                 )
 
             def human_floor_wait_ms(n_buttons: int, generation_ms: float) -> float:
-                if n_buttons < 1:
-                    return 0.0
-                human_ms = 100.0 + 30.0 * (n_buttons - 1)
-                llm_ms = generation_ms + (n_buttons - 1) * (1000.0 / 60.0)
-                return max(0.0, human_ms - llm_ms)
+                return model_reaction_delay_ms(n_buttons, generation_ms) - generation_ms
 
             def snapshot_robot_observation():
                 obs = session.observation
