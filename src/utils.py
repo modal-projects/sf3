@@ -1492,6 +1492,10 @@ BASE_META_INSTRUCTIONS = {
 RECENT_MOVE_LIMIT = 8
 
 
+def repeat_exclusion_probability(rollout: int) -> float:
+    return max(0.0, min(1.0, (13 - rollout) / 12))
+
+
 def get_available_instructions_for_character(
     character: str,
     super_art: int,

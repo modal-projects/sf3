@@ -1,40 +1,42 @@
-import time
-from concurrent.futures import ThreadPoolExecutor
-
-import modal
 from modal_dojo import (
     OnlineRollout,
     Qwen3_VL_8B,
     Qwen3_VL_8B_Recipe,
     TrainConfig,
-    convert_megatron_checkpoint_to_hf,
+)
+from src.train.rollout import (
+    sf3_generate,
+    sf3_log_rollout,
+    sf3_reward_post_process,
+    sf3_rollout,
+)
+from src.train.worker import MAX_WORKERS, WORKER_IMAGE_ENV, build_worker_image
+from src.utils import (
+    CONTAINER_REGION,
+    MAX_TOKENS,
+    TEMPERATURE,
+    TOP_P,
 )
 
-from src.eval.main import app as eval_app
-from src.eval.main import cache_volume, orchestrate
-from src.serve import POLICY_MODEL_KEY
-from src.serve.qwen3_vl_8b import CHECKPOINTS_MOUNT
-from src.train.rollout import sf3_generate
-from src.utils import MAX_TOKENS, TEMPERATURE, TOP_P, create_gameplay_image
+NUM_ROLLOUTS = 50
 
-NUM_ROLLOUTS = 100
-
-ROLLOUT_BATCH_SIZE = 32
-N_SAMPLES_PER_PROMPT = 2
+ROLLOUT_BATCH_SIZE = MAX_WORKERS
+N_SAMPLES_PER_PROMPT = 1
 GLOBAL_BATCH_SIZE = ROLLOUT_BATCH_SIZE * N_SAMPLES_PER_PROMPT
 
 model = Qwen3_VL_8B()
 recipe = Qwen3_VL_8B_Recipe(
+    rollout_function=sf3_rollout,
     custom_generate_function=sf3_generate,
+    custom_reward_post_process_function=sf3_reward_post_process,
+    custom_rollout_log_function=sf3_log_rollout,
     dynamic_sampling_filter_path="src.train.rollout.sf3_valid_group",
-    image_overlay=lambda image: create_gameplay_image(
-        base_image=image,
-        copy=True,
-        add_python_source=True,
-    ),
-    actor_num_gpus_per_node=8,
+    image_overlay=lambda image: image.add_local_python_source("src", copy=True),
+    actor_num_gpus_per_node=1,
+    region=CONTAINER_REGION,
     num_rollout=NUM_ROLLOUTS,
-    save_interval=10,
+    save_interval=5,
+    capture_trace=True,
     rollout_batch_size=ROLLOUT_BATCH_SIZE,
     n_samples_per_prompt=N_SAMPLES_PER_PROMPT,
     global_batch_size=GLOBAL_BATCH_SIZE,
@@ -55,41 +57,10 @@ config = TrainConfig(
 )
 
 
-cache_volume_url = (
-    f"https://modal.com/storage/{modal.Workspace.from_context().hydrate().name}"
-    f"/{modal.Environment.from_context().hydrate().name}/{cache_volume.name}"
-)
-
-
-def eval_checkpoint(checkpoint):
-    hf_checkpoint = convert_megatron_checkpoint_to_hf(checkpoint, model)
-    print(f"converted checkpoint: {hf_checkpoint.path}")
-    player = f"{CHECKPOINTS_MOUNT}/{hf_checkpoint.path_relative_to_volume}"
-    for opponent in ("cpu:1", POLICY_MODEL_KEY):
-        report = orchestrate.remote(players=(player, opponent))
-        print(
-            f"{checkpoint.name} vs {opponent}: "
-            f"{cache_volume_url}/{report['config']['output_dir']}"
-        )
-
-
-with config.launch() as run, eval_app.run(), ThreadPoolExecutor() as evals:
+if __name__ == "__main__":
+    recipe.environment = {
+        **recipe.environment,
+        WORKER_IMAGE_ENV: build_worker_image(),
+    }
+    run = config.launch()
     print(f"run id: {run.training_run_id}")
-    checkpoint, pending = None, []
-    while True:
-        done = run.done()
-        latest = run.latest_checkpoint()
-        if latest is not None and latest != checkpoint:
-            checkpoint = latest
-            print(f"new checkpoint: {checkpoint.path}")
-            pending.append((checkpoint.name, evals.submit(eval_checkpoint, checkpoint)))
-        if done:
-            break
-        time.sleep(30)
-    if checkpoint is None:
-        raise RuntimeError("run produced no checkpoint")
-    for name, future in pending:
-        try:
-            future.result()
-        except Exception as exc:
-            print(f"{name} eval failed: {type(exc).__name__}: {exc}")
