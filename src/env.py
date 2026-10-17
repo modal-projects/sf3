@@ -208,6 +208,10 @@ def _action_values(player: int, action_id: int):
         15: ("JPUNCH", "SKICK"),
         16: ("SPUNCH", "FKICK"),
         17: ("FPUNCH", "RKICK"),
+        18: ("SKICK", "FPUNCH"),
+        19: ("JPUNCH", "SPUNCH", "FPUNCH"),
+        20: ("JPUNCH", "SPUNCH"),
+        21: ("DOWN", "JPUNCH", "SPUNCH", "FPUNCH"),
     }.get(int(action_id), ())
     return [getattr(Actions, f"{prefix}_{name}").value for name in action_names]
 

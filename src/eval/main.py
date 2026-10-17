@@ -171,7 +171,7 @@ async def play_game(
                 recent[seat],
             )
             generation_ms = (time.perf_counter() - started_at) * 1000
-            delay = model_reaction_frames(len(buttons), generation_ms)
+            delay = model_reaction_frames(buttons, generation_ms)
             return [0] * delay + buttons, name
 
         try:

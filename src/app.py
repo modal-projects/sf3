@@ -532,7 +532,8 @@ class Web:
 
                 # super art
 
-                if action == 18:
+                # Named macro requests share IDs with raw emulator chords.
+                if action == 18 and "super_art" in action_data:
                     super_art_name = action_data.get("super_art")
                     if not super_art_name:
                         return
@@ -547,7 +548,7 @@ class Web:
 
                 # combo
 
-                elif action == 19:
+                elif action == 19 and "combo" in action_data:
                     combo_name = action_data.get("combo")
                     if not combo_name:
                         return
@@ -568,7 +569,7 @@ class Web:
                             self.player1_current_action = action
                         else:
                             self.player2_current_action = action
-                    else:  # attack moves (9-17), so queue
+                    else:  # attack moves and chords, so queue
                         self.enqueue_buttons(next_buttons, [action])
 
             async def cleanup_environment(self):
@@ -989,8 +990,8 @@ class Web:
                     },
                 )
 
-            def human_floor_wait_ms(n_buttons: int, generation_ms: float) -> float:
-                return model_reaction_delay_ms(n_buttons, generation_ms) - generation_ms
+            def human_floor_wait_ms(buttons, generation_ms: float) -> float:
+                return model_reaction_delay_ms(buttons, generation_ms) - generation_ms
 
             def snapshot_robot_observation():
                 obs = session.observation
@@ -1096,7 +1097,7 @@ class Web:
                         if action_generation != session.action_generation:
                             continue
                         wait_ms = max(
-                            human_floor_wait_ms(len(moves), generation_ms)
+                            human_floor_wait_ms(moves, generation_ms)
                             for _, moves, _, generation_ms in results
                         )
                         if wait_ms > 0:

@@ -237,6 +237,10 @@ const createUIController = () => {
       "lplk-display": onPad ? "A + X" : "J + U",
       "mpmk-display": onPad ? "B + Y" : "K + I",
       "hphk-display": onPad ? "RB + LB" : "L + O",
+      "lkhp-display": onPad ? "X + RB" : "U + L",
+      "pp-display": onPad ? "A + B" : "J + K",
+      "ppp-display": onPad ? "A + B + RB" : "J + K + L",
+      "downppp-display": onPad ? "Down + A + B + RB" : "Down + J + K + L",
     };
 
     Object.entries(controls).forEach(([id, text]) => {

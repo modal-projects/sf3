@@ -275,7 +275,9 @@
         class="img-icon"
       />
     </div>
-    <main class="relative min-h-0 flex-1 flex flex-col justify-center items-center">
+    <main
+      class="relative min-h-0 flex-1 flex flex-col justify-center items-center"
+    >
       <div
         id="loading-screen"
         class="flex flex-col justify-center items-center gap-8"
@@ -388,6 +390,28 @@
                   <span class="game-ctrl text-xs" id="hphk-display">L + O</span>
                   <h3 class="text-sf-gold text-xs lg:text-sm">HP + HK</h3>
                 </div>
+                <div class="flex justify-between items-center gap-4">
+                  <span class="game-ctrl text-xs" id="lkhp-display">U + L</span>
+                  <h3 class="text-sf-gold text-xs lg:text-sm">LK + HP</h3>
+                </div>
+                <div class="flex justify-between items-center gap-4">
+                  <span class="game-ctrl text-xs" id="pp-display">J + K</span>
+                  <h3 class="text-sf-gold text-xs lg:text-sm">Two Punches</h3>
+                </div>
+                <div class="flex justify-between items-center gap-4">
+                  <span class="game-ctrl text-xs" id="ppp-display"
+                    >J + K + L</span
+                  >
+                  <h3 class="text-sf-gold text-xs lg:text-sm">Three Punches</h3>
+                </div>
+                <div class="flex justify-between items-center gap-4">
+                  <span class="game-ctrl text-xs" id="downppp-display"
+                    >Down + J + K + L</span
+                  >
+                  <h3 class="text-sf-gold text-xs lg:text-sm">
+                    Down + Three Punches
+                  </h3>
+                </div>
               </div>
             </div>
           </div>
@@ -456,10 +480,7 @@
               >
                 P1
               </h2>
-              <div
-                id="participant-list-p1"
-                class="flex flex-col gap-2"
-              ></div>
+              <div id="participant-list-p1" class="flex flex-col gap-2"></div>
             </section>
             <section
               class="flex min-w-0 flex-col gap-3 rounded-xl border border-sf-red/40 bg-sf-darker/50 p-3 md:p-5"
@@ -471,10 +492,7 @@
               >
                 P2
               </h2>
-              <div
-                id="participant-list-p2"
-                class="flex flex-col gap-2"
-              ></div>
+              <div id="participant-list-p2" class="flex flex-col gap-2"></div>
             </section>
           </div>
         </div>

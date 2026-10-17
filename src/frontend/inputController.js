@@ -23,6 +23,10 @@ const createInputController = () => {
     LOW_PUNCH_LOW_KICK: 15,
     MEDIUM_PUNCH_MEDIUM_KICK: 16,
     HIGH_PUNCH_HIGH_KICK: 17,
+    LOW_KICK_HIGH_PUNCH: 18,
+    THREE_PUNCHES: 19,
+    TWO_PUNCHES: 20,
+    DOWN_THREE_PUNCHES: 21,
   };
 
   const idxToMove = [
@@ -52,6 +56,14 @@ const createInputController = () => {
       display: "L + O",
       gamepadDisplay: "RB + LB",
     },
+    { name: "Low Kick+High Punch", display: "U + L", gamepadDisplay: "X + RB" },
+    { name: "Three Punches", display: "J + K + L", gamepadDisplay: "A + B + RB" },
+    { name: "Two Punches", display: "J + K", gamepadDisplay: "A + B" },
+    {
+      name: "Down+Three Punches",
+      display: "Down + J + K + L",
+      gamepadDisplay: "Down + A + B + RB",
+    },
   ];
 
   let combos = {};
@@ -59,6 +71,24 @@ const createInputController = () => {
   let gamepadWasSelecting = false;
   let gamepadSelectionConfirmPressed = false;
   let gamepadHeldAttack = actions.NO_MOVE;
+
+  const getAttackAction = (attacks, down) => {
+    if (attacks.LP && attacks.MP && attacks.HP) {
+      return down ? actions.DOWN_THREE_PUNCHES : actions.THREE_PUNCHES;
+    }
+    if (attacks.LP && attacks.MP) return actions.TWO_PUNCHES;
+    if (attacks.LK && attacks.HP) return actions.LOW_KICK_HIGH_PUNCH;
+    if (attacks.LP && attacks.LK) return actions.LOW_PUNCH_LOW_KICK;
+    if (attacks.MP && attacks.MK) return actions.MEDIUM_PUNCH_MEDIUM_KICK;
+    if (attacks.HP && attacks.HK) return actions.HIGH_PUNCH_HIGH_KICK;
+    if (attacks.HP) return actions.HIGH_PUNCH;
+    if (attacks.MP) return actions.MEDIUM_PUNCH;
+    if (attacks.LP) return actions.LOW_PUNCH;
+    if (attacks.HK) return actions.HIGH_KICK;
+    if (attacks.MK) return actions.MEDIUM_KICK;
+    if (attacks.LK) return actions.LOW_KICK;
+    return actions.NO_MOVE;
+  };
 
   const getActionFromKeys = () => {
     const state = GameState.get();
@@ -83,23 +113,15 @@ const createInputController = () => {
           HK: keyState["KeyO"],
         };
 
-    if (attacks.LP && attacks.LK) return actions.LOW_PUNCH_LOW_KICK;
-    if (attacks.MP && attacks.MK) return actions.MEDIUM_PUNCH_MEDIUM_KICK;
-    if (attacks.HP && attacks.HK) return actions.HIGH_PUNCH_HIGH_KICK;
-
-    if (attacks.HP) return actions.HIGH_PUNCH;
-    if (attacks.MP) return actions.MEDIUM_PUNCH;
-    if (attacks.LP) return actions.LOW_PUNCH;
-    if (attacks.HK) return actions.HIGH_KICK;
-    if (attacks.MK) return actions.MEDIUM_KICK;
-    if (attacks.LK) return actions.LOW_KICK;
-
     const directions = {
       left: keyState["KeyA"] || keyState["ArrowLeft"],
       right: keyState["KeyD"] || keyState["ArrowRight"],
       up: keyState["KeyW"] || keyState["ArrowUp"],
       down: keyState["KeyS"] || keyState["ArrowDown"],
     };
+
+    const attack = getAttackAction(attacks, directions.down);
+    if (attack !== actions.NO_MOVE) return attack;
 
     if (directions.left && directions.up) return actions.LEFT_UP;
     if (directions.right && directions.up) return actions.UP_RIGHT;
@@ -166,27 +188,7 @@ const createInputController = () => {
           HP: currentState.buttons[5],
         };
 
-    let attack = actions.NO_MOVE;
-
-    if (attacks.LP && attacks.LK) {
-      attack = actions.LOW_PUNCH_LOW_KICK;
-    } else if (attacks.MP && attacks.MK) {
-      attack = actions.MEDIUM_PUNCH_MEDIUM_KICK;
-    } else if (attacks.HP && attacks.HK) {
-      attack = actions.HIGH_PUNCH_HIGH_KICK;
-    } else if (attacks.HP) {
-      attack = actions.HIGH_PUNCH;
-    } else if (attacks.MP) {
-      attack = actions.MEDIUM_PUNCH;
-    } else if (attacks.LP) {
-      attack = actions.LOW_PUNCH;
-    } else if (attacks.HK) {
-      attack = actions.HIGH_KICK;
-    } else if (attacks.MK) {
-      attack = actions.MEDIUM_KICK;
-    } else if (attacks.LK) {
-      attack = actions.LOW_KICK;
-    }
+    const attack = getAttackAction(attacks, directions.down);
     const attackPressed =
       attack !== actions.NO_MOVE && attack !== gamepadHeldAttack;
     gamepadHeldAttack = attack;
