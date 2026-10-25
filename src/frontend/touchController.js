@@ -1,11 +1,11 @@
 import { byId } from "./utils.js";
 import { GameState } from "./gameState.js";
 import { InputController } from "./inputController.js";
-import { hasHumanParticipant } from "./participantOptions.js";
 
 const createTouchController = () => {
   const { BITS } = InputController;
   const DIRECTION_MASKS = {
+    neutral: 0,
     "up-left": BITS.left | BITS.up,
     up: BITS.up,
     "up-right": BITS.up | BITS.right,
@@ -85,12 +85,11 @@ const createTouchController = () => {
   const refreshVisibility = () => {
     const controls = byId("touch-controls");
     if (!controls) return;
-    const state = GameState.get();
     const inGame = GameState.getCurrentScreen() === "game";
-    const usable =
-      state.gamePhase === "selecting" ||
-      (hasHumanParticipant(state) && state.gamePhase !== "finished");
-    controls.classList.toggle("hidden", !(inGame && usable));
+    controls.classList.toggle(
+      "hidden",
+      !(inGame && GameState.get().acceptsInput)
+    );
   };
 
   const bindDirections = (dpad) => {

@@ -18,6 +18,7 @@ const createInputController = () => {
   };
   const DIRECTION_MASK = BITS.left | BITS.right | BITS.up | BITS.down;
   const ATTACK_KEYS = ["LP", "MP", "HP", "LK", "MK", "HK"];
+  const ATTACK_MASK = ATTACK_KEYS.reduce((bits, key) => bits | BITS[key], 0);
   const DIRECTION_GLYPHS = {
     [BITS.left]: "←",
     [BITS.left | BITS.up]: "↖",
@@ -198,7 +199,7 @@ const createInputController = () => {
   const setTouchDirection = (mask) => {
     if (mask === touchDirection) return;
     touchDirection = mask;
-    handleActionFromInput(getActionFromKeys());
+    handleActionFromInput(getActionFromKeys() & ~ATTACK_MASK);
   };
 
   const setTouchAttacks = (mask) => {
