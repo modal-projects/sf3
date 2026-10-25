@@ -18,6 +18,7 @@ const createInputController = () => {
   };
   const DIRECTION_MASK = BITS.left | BITS.right | BITS.up | BITS.down;
   const ATTACK_KEYS = ["LP", "MP", "HP", "LK", "MK", "HK"];
+  const ATTACK_MASK = ATTACK_KEYS.reduce((bits, key) => bits | BITS[key], 0);
   const DIRECTION_GLYPHS = {
     [BITS.left]: "←",
     [BITS.left | BITS.up]: "↖",
@@ -62,6 +63,8 @@ const createInputController = () => {
   let gamepadWasSelecting = false;
   let gamepadSelectionConfirmPressed = false;
   let gamepadHeldAttack = 0;
+  let touchDirection = 0;
+  let touchAttacks = 0;
 
   const getActionFromKeys = () => {
     const state = GameState.get();
@@ -70,7 +73,7 @@ const createInputController = () => {
 
     const attacks = selecting
       ? {
-          LP: keyState["Enter"],
+          LP: keyState["Enter"] || touchAttacks !== 0,
           MP: false,
           HP: false,
           LK: false,
@@ -78,19 +81,31 @@ const createInputController = () => {
           HK: false,
         }
       : {
-          LP: keyState["KeyJ"],
-          MP: keyState["KeyK"],
-          HP: keyState["KeyL"],
-          LK: keyState["KeyU"],
-          MK: keyState["KeyI"],
-          HK: keyState["KeyO"],
+          LP: keyState["KeyJ"] || (touchAttacks & BITS.LP) !== 0,
+          MP: keyState["KeyK"] || (touchAttacks & BITS.MP) !== 0,
+          HP: keyState["KeyL"] || (touchAttacks & BITS.HP) !== 0,
+          LK: keyState["KeyU"] || (touchAttacks & BITS.LK) !== 0,
+          MK: keyState["KeyI"] || (touchAttacks & BITS.MK) !== 0,
+          HK: keyState["KeyO"] || (touchAttacks & BITS.HK) !== 0,
         };
 
     const directions = {
-      left: keyState["KeyA"] || keyState["ArrowLeft"],
-      right: keyState["KeyD"] || keyState["ArrowRight"],
-      up: keyState["KeyW"] || keyState["ArrowUp"],
-      down: keyState["KeyS"] || keyState["ArrowDown"],
+      left:
+        keyState["KeyA"] ||
+        keyState["ArrowLeft"] ||
+        (touchDirection & BITS.left) !== 0,
+      right:
+        keyState["KeyD"] ||
+        keyState["ArrowRight"] ||
+        (touchDirection & BITS.right) !== 0,
+      up:
+        keyState["KeyW"] ||
+        keyState["ArrowUp"] ||
+        (touchDirection & BITS.up) !== 0,
+      down:
+        keyState["KeyS"] ||
+        keyState["ArrowDown"] ||
+        (touchDirection & BITS.down) !== 0,
     };
 
     return directionBits(directions) | attackBits(attacks);
@@ -181,8 +196,22 @@ const createInputController = () => {
     specialMoves = extraSpecialMoves;
   };
 
+  const setTouchDirection = (mask) => {
+    if (mask === touchDirection) return;
+    touchDirection = mask;
+    handleActionFromInput(getActionFromKeys() & ~ATTACK_MASK);
+  };
+
+  const setTouchAttacks = (mask) => {
+    if (mask === touchAttacks) return;
+    touchAttacks = mask;
+    handleActionFromInput(getActionFromKeys());
+  };
+
   const releaseAllKeys = () => {
     GameState.update({ keyState: {} });
+    touchDirection = 0;
+    touchAttacks = 0;
     handleActionFromInput(0);
   };
 
@@ -213,12 +242,15 @@ const createInputController = () => {
   };
 
   return {
+    BITS,
     displayFrame,
     init,
     initGamepadInput,
     handleActionFromInput,
     processGamepadInput,
     setExtraMoves,
+    setTouchDirection,
+    setTouchAttacks,
     getCombos: () => combos,
     getSpecialMoves: () => specialMoves,
   };

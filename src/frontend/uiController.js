@@ -226,22 +226,40 @@ const createUIController = () => {
 
   const updateControlsDisplay = () => {
     const onPad = GamepadManager.isConnected();
-    const controls = {
-      "movement-display": onPad ? "Left Stick / D-Pad" : "WASD / Arrow Keys",
-      "lp-display": onPad ? "A" : "J",
-      "mp-display": onPad ? "B" : "K",
-      "hp-display": onPad ? "RB" : "L",
-      "lk-display": onPad ? "X" : "U",
-      "mk-display": onPad ? "Y" : "I",
-      "hk-display": onPad ? "LB" : "O",
-      "lplk-display": onPad ? "A + X" : "J + U",
-      "mpmk-display": onPad ? "B + Y" : "K + I",
-      "hphk-display": onPad ? "RB + LB" : "L + O",
-      "lkhp-display": onPad ? "X + RB" : "U + L",
-      "pp-display": onPad ? "A + B" : "J + K",
-      "ppp-display": onPad ? "A + B + RB" : "J + K + L",
-      "downppp-display": onPad ? "Down + A + B + RB" : "Down + J + K + L",
-    };
+    const onTouch = !onPad && navigator.maxTouchPoints > 0;
+    const controls = onTouch
+      ? {
+          "movement-display": "Drag left half",
+          "lp-display": "Tap",
+          "mp-display": "Double-tap",
+          "hp-display": "Hold",
+          "lk-display": "Swipe down",
+          "mk-display": "Swipe sideways",
+          "hk-display": "Swipe up",
+          "lplk-display": "Tap + swipe down",
+          "mpmk-display": "Double-tap + swipe sideways",
+          "hphk-display": "Hold + swipe up",
+          "lkhp-display": "Swipe down + hold",
+          "pp-display": "Tap + double-tap",
+          "ppp-display": "Tap + double-tap + hold",
+          "downppp-display": "Drag down + tap + double-tap + hold",
+        }
+      : {
+          "movement-display": onPad ? "Left Stick / D-Pad" : "WASD / Arrow Keys",
+          "lp-display": onPad ? "A" : "J",
+          "mp-display": onPad ? "B" : "K",
+          "hp-display": onPad ? "RB" : "L",
+          "lk-display": onPad ? "X" : "U",
+          "mk-display": onPad ? "Y" : "I",
+          "hk-display": onPad ? "LB" : "O",
+          "lplk-display": onPad ? "A + X" : "J + U",
+          "mpmk-display": onPad ? "B + Y" : "K + I",
+          "hphk-display": onPad ? "RB + LB" : "L + O",
+          "lkhp-display": onPad ? "X + RB" : "U + L",
+          "pp-display": onPad ? "A + B" : "J + K",
+          "ppp-display": onPad ? "A + B + RB" : "J + K + L",
+          "downppp-display": onPad ? "Down + A + B + RB" : "Down + J + K + L",
+        };
 
     Object.entries(controls).forEach(([id, text]) => {
       const element = byId(id);
