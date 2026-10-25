@@ -114,36 +114,25 @@ const createTouchController = () => {
     zone.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       zone.setPointerCapture(e.pointerId);
-      const pointer = {
+      attackPointers.set(e.pointerId, {
         ox: e.clientX,
         oy: e.clientY,
+        t0: performance.now(),
         fired: false,
-        holdTimer: null,
-      };
-      pointer.holdTimer = setTimeout(() => {
-        if (pointer.fired) return;
-        pointer.fired = true;
-        fireAttack("HP", e.clientX, e.clientY);
-      }, HOLD_MS);
-      attackPointers.set(e.pointerId, pointer);
+      });
     });
     zone.addEventListener("pointermove", (e) => {
       const pointer = attackPointers.get(e.pointerId);
       if (!pointer || pointer.fired) return;
-      const dx = e.clientX - pointer.ox;
-      const dy = e.clientY - pointer.oy;
-      if (Math.hypot(dx, dy) > 10) clearTimeout(pointer.holdTimer);
-      const dir = swipeDirection(dx, dy);
+      const dir = swipeDirection(e.clientX - pointer.ox, e.clientY - pointer.oy);
       if (!dir) return;
       pointer.fired = true;
-      clearTimeout(pointer.holdTimer);
       fireAttack(SWIPE_ATTACKS[dir], e.clientX, e.clientY);
     });
     const release = (e) => {
       const pointer = attackPointers.get(e.pointerId);
       if (!pointer) return;
       attackPointers.delete(e.pointerId);
-      clearTimeout(pointer.holdTimer);
       if (pointer.fired || e.type === "pointercancel") return;
       const dir = swipeDirection(e.clientX - pointer.ox, e.clientY - pointer.oy);
       if (dir) {
@@ -151,6 +140,10 @@ const createTouchController = () => {
         return;
       }
       const now = performance.now();
+      if (now - pointer.t0 >= HOLD_MS) {
+        fireAttack("HP", e.clientX, e.clientY);
+        return;
+      }
       const isDouble = now - lastTapAt < DOUBLE_TAP_MS;
       lastTapAt = now;
       fireAttack(isDouble ? "MP" : "LP", e.clientX, e.clientY);
@@ -162,7 +155,6 @@ const createTouchController = () => {
 
   const releaseAll = () => {
     movePointer = null;
-    for (const pointer of attackPointers.values()) clearTimeout(pointer.holdTimer);
     attackPointers.clear();
     attackHeld = 0;
     hideStick();
