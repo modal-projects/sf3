@@ -922,7 +922,7 @@ class Web:
                     await fail_current_game(format_runtime_error(exc))
                     return False
                 if session.game_state["status"] == "models_loading":
-                    session.game_state["status"] = "transitioning"
+                    session.game_state["status"] = "selecting"
                     await session.send_game_state()
                 return True
 
