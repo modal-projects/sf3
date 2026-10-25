@@ -336,6 +336,7 @@ class Web:
 
                 # communication
 
+                self.owner_session_id = None
                 self.stop_event = asyncio.Event()
                 self.frame_buffer = GameFrameBuffer(self.stop_event.is_set)
                 self.outbound_message_queue = asyncio.Queue()
@@ -606,6 +607,11 @@ class Web:
                 await websocket.close(code=1008)
                 return
 
+            session_key = websocket.headers.get("x-modal-server-session-id")
+            if not session_key:
+                await websocket.close(code=1008)
+                return
+
             await websocket.accept()
 
             session = self.game_sessions.get(game_id)
@@ -614,8 +620,19 @@ class Web:
                 if session is None and len(self.game_sessions) >= MAX_GAME_SESSIONS:
                     await websocket.close(code=1013)
                     return
+                if any(
+                    existing.owner_session_id == session_key
+                    and not existing.stop_event.is_set()
+                    for existing in self.game_sessions.values()
+                ):
+                    await websocket.close(code=1013)
+                    return
                 session = GameSession()
+                session.owner_session_id = session_key
                 creating_session = True
+            elif session.owner_session_id != session_key:
+                await websocket.close(code=1008)
+                return
 
             frame_encoder = FrameEncoder()
             video_track = GameVideoTrack(session.frame_buffer)
