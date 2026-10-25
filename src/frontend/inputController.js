@@ -67,8 +67,7 @@ const createInputController = () => {
   let touchAttacks = 0;
   let pointerDownAt = null;
 
-  const POINTER_TAP_DISTANCE_PX = 36;
-  const POINTER_CONFIRM_RELEASE_MS = 80;
+  const POINTER_TAP_DISTANCE_PX = 20;
 
   const getActionFromKeys = () => {
     const state = GameState.get();
@@ -228,7 +227,7 @@ const createInputController = () => {
         "select, button, a, input, textarea, [contenteditable], #help-overlay, #touch-attack"
       ) ||
       (pointerDownAt &&
-        Math.hypot(e.clientX - pointerDownAt.x, e.clientY - pointerDownAt.y) >
+        Math.hypot(e.clientX - pointerDownAt.x, e.clientY - pointerDownAt.y) >=
           POINTER_TAP_DISTANCE_PX)
     )
       return;
@@ -242,10 +241,6 @@ const createInputController = () => {
       target?.closest("#game-frame")
     ) {
       handleActionFromInput(BITS.LP);
-      setTimeout(
-        () => handleActionFromInput(0),
-        POINTER_CONFIRM_RELEASE_MS
-      );
     }
   };
 
