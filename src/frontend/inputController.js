@@ -65,6 +65,10 @@ const createInputController = () => {
   let gamepadHeldAttack = 0;
   let touchDirection = 0;
   let touchAttacks = 0;
+  let pointerDownAt = null;
+
+  const POINTER_TAP_DISTANCE_PX = 36;
+  const POINTER_CONFIRM_RELEASE_MS = 80;
 
   const getActionFromKeys = () => {
     const state = GameState.get();
@@ -215,9 +219,43 @@ const createInputController = () => {
     handleActionFromInput(0);
   };
 
+  const handlePointerSelect = (e) => {
+    const state = GameState.get();
+    if (!state.loaded) return;
+    const target = e.target instanceof Element ? e.target : null;
+    if (
+      target?.closest(
+        "select, button, a, input, textarea, [contenteditable], #help-overlay, #touch-attack"
+      ) ||
+      (pointerDownAt &&
+        Math.hypot(e.clientX - pointerDownAt.x, e.clientY - pointerDownAt.y) >
+          POINTER_TAP_DISTANCE_PX)
+    )
+      return;
+    if (state.gamePhase === "pregame") {
+      document.dispatchEvent(new Event("gameStartRequest"));
+      return;
+    }
+    if (
+      state.gamePhase === "selecting" &&
+      state.acceptsInput &&
+      target?.closest("#game-frame")
+    ) {
+      handleActionFromInput(BITS.LP);
+      setTimeout(
+        () => handleActionFromInput(0),
+        POINTER_CONFIRM_RELEASE_MS
+      );
+    }
+  };
+
   const init = () => {
     document.addEventListener("keydown", (e) => handleKeyboardEvent(e, true));
     document.addEventListener("keyup", (e) => handleKeyboardEvent(e, false));
+    document.addEventListener("pointerdown", (e) => {
+      pointerDownAt = { x: e.clientX, y: e.clientY };
+    });
+    document.addEventListener("click", handlePointerSelect);
     window.addEventListener("blur", releaseAllKeys);
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) releaseAllKeys();
