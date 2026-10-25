@@ -117,8 +117,8 @@ const createTouchController = () => {
       const pointer = {
         ox: e.clientX,
         oy: e.clientY,
-        t0: performance.now(),
         fired: false,
+        swiped: false,
         holdTimer: null,
       };
       pointer.holdTimer = setTimeout(() => {
@@ -130,11 +130,10 @@ const createTouchController = () => {
     });
     zone.addEventListener("pointermove", (e) => {
       const pointer = attackPointers.get(e.pointerId);
-      if (!pointer || pointer.fired) return;
-      if (Math.hypot(e.clientX - pointer.ox, e.clientY - pointer.oy) > 10)
-        clearTimeout(pointer.holdTimer);
+      if (!pointer || pointer.swiped) return;
       const dir = swipeDirection(e.clientX - pointer.ox, e.clientY - pointer.oy);
       if (!dir) return;
+      pointer.swiped = true;
       pointer.fired = true;
       clearTimeout(pointer.holdTimer);
       fireAttack(SWIPE_ATTACKS[dir], e.clientX, e.clientY);
@@ -151,10 +150,6 @@ const createTouchController = () => {
         return;
       }
       const now = performance.now();
-      if (now - pointer.t0 >= HOLD_MS) {
-        fireAttack("HP", e.clientX, e.clientY);
-        return;
-      }
       const isDouble = now - lastTapAt < DOUBLE_TAP_MS;
       lastTapAt = now;
       fireAttack(isDouble ? "MP" : "LP", e.clientX, e.clientY);
