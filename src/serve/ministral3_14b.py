@@ -180,16 +180,11 @@ class Ministral3Server:
             "temperature": 0.0,
         }
 
-        messages, _, _, _, _, available_moves = create_random_messages()
-
-        _ = await self._generate(
-            messages,
-            self.SamplingParams(
-                **self.sampling_params_kwargs,
-                structured_outputs=self.StructuredOutputsParams(
-                    choice=available_moves,
-                ),
-            ),
+        messages, character, super_art, super_count, side, available_moves = (
+            create_random_messages()
+        )
+        _ = await self.chat.local(
+            messages, character, super_art, super_count, 1 - side, available_moves
         )
         await self.llm.reset_mm_cache()
 
