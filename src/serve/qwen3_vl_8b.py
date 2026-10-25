@@ -128,12 +128,11 @@ class Qwen3VLServer:
             "max_new_tokens": MAX_TOKENS,
         }
 
-        messages, *_ = create_random_messages()
-        prompt, images = self.prepare_request(messages)
-        await self.llm.async_generate(
-            prompt,
-            image_data=images or None,
-            sampling_params=self.sampling_params,
+        messages, character, super_art, super_count, side, available_moves = (
+            create_random_messages()
+        )
+        await self.chat(
+            messages, character, super_art, super_count, 1 - side, available_moves
         )
 
     @modal.method()

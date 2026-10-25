@@ -127,17 +127,11 @@ class Qwen35Server:
             "max_new_tokens": MAX_TOKENS,
         }
 
-        messages, _, _, _, _, available_moves = create_random_messages()
-        prompt, images = self.prepare_request(messages)
-        warmup_params = {
-            **self.sampling_params,
-            "regex": move_regex(available_moves),
-        }
-
-        _ = await self.llm.async_generate(
-            prompt,
-            image_data=images,
-            sampling_params=warmup_params,
+        messages, character, super_art, super_count, side, available_moves = (
+            create_random_messages()
+        )
+        _ = await self.chat(
+            messages, character, super_art, super_count, 1 - side, available_moves
         )
 
     @modal.method()
