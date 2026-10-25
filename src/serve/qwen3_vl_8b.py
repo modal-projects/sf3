@@ -131,7 +131,7 @@ class Qwen3VLServer:
         messages, character, super_art, super_count, side, available_moves = (
             create_random_messages()
         )
-        await self.chat(
+        await self.chat.local(
             messages, character, super_art, super_count, 1 - side, available_moves
         )
 

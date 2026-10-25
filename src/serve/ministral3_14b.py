@@ -183,7 +183,7 @@ class Ministral3Server:
         messages, character, super_art, super_count, side, available_moves = (
             create_random_messages()
         )
-        _ = await self.chat(
+        _ = await self.chat.local(
             messages, character, super_art, super_count, 1 - side, available_moves
         )
         await self.llm.reset_mm_cache()
