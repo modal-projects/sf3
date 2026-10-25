@@ -117,6 +117,12 @@
         .game-ctrl {
           @apply py-1 px-3 bg-sf-dark border border-sf-green rounded-lg;
         }
+        .touch-btn {
+          @apply flex select-none items-center justify-center rounded-lg border-2 border-sf-green/70 bg-sf-darker/70 font-bold text-sf-beige [touch-action:none];
+        }
+        .touch-btn.touch-active {
+          @apply border-sf-green bg-sf-green/40 text-sf-green;
+        }
         .spinner {
           @apply border-4 border-sf-green/30 border-t-sf-green rounded-full animate-spin;
         }
@@ -157,48 +163,20 @@
       id="rotate-device"
       class="fixed inset-0 bg-sf-dark z-[100] flex-col justify-center items-center gap-8 hidden"
     >
-      <h2
-        id="requirement-title"
-        class="text-2xl text-sf-green text-glow animate-pulse"
-      >
+      <h2 class="text-2xl text-sf-green text-glow animate-pulse">
         Please Rotate Your Device
       </h2>
       <p
-        id="requirement-text"
         class="text-sf-beige-dark px-8 text-center max-w-sm whitespace-pre-line"
       >
         This game requires landscape orientation on mobile devices.
       </p>
       <div
-        id="requirement-icon"
         class="border-4 border-sf-gold rounded-lg w-12 h-20 relative animate-rotate-90"
       >
         <div
           class="absolute top-1 left-1/2 transform -translate-x-1/2 w-4 h-1 bg-sf-gold rounded-full"
         ></div>
-      </div>
-      <div id="input-icons" class="hidden flex-row gap-4 items-center">
-        <div class="flex flex-col items-center gap-2">
-          <div class="p-4 border-2 border-sf-gold rounded-lg">
-            <img
-              src="/icons/keyboard.webp"
-              alt="Keyboard"
-              class="size-12 filter invert"
-            />
-          </div>
-          <span class="text-sf-gold text-sm">Keyboard</span>
-        </div>
-        <span class="text-sf-beige">OR</span>
-        <div class="flex flex-col items-center gap-2">
-          <div class="p-4 border-2 border-sf-gold rounded-lg">
-            <img
-              src="/icons/gamepad.webp"
-              alt="Gamepad"
-              class="size-12 filter invert"
-            />
-          </div>
-          <span class="text-sf-gold text-sm">Gamepad</span>
-        </div>
       </div>
     </div>
     <header
@@ -540,6 +518,128 @@
             >
               PLAY AGAIN
             </button>
+          </div>
+          <div
+            id="touch-controls"
+            class="pointer-events-none absolute inset-0 z-10 hidden"
+          >
+            <div
+              id="touch-dpad"
+              class="pointer-events-auto absolute bottom-2 left-2 grid grid-cols-3 gap-1 sm:bottom-4 sm:left-4"
+            >
+              <button
+                type="button"
+                class="touch-btn size-10 sm:size-12"
+                data-touch-dir="up-left"
+                aria-label="Up Left"
+              >
+                ↖
+              </button>
+              <button
+                type="button"
+                class="touch-btn size-10 sm:size-12"
+                data-touch-dir="up"
+                aria-label="Up"
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                class="touch-btn size-10 sm:size-12"
+                data-touch-dir="up-right"
+                aria-label="Up Right"
+              >
+                ↗
+              </button>
+              <button
+                type="button"
+                class="touch-btn size-10 sm:size-12"
+                data-touch-dir="left"
+                aria-label="Left"
+              >
+                ←
+              </button>
+              <div aria-hidden="true"></div>
+              <button
+                type="button"
+                class="touch-btn size-10 sm:size-12"
+                data-touch-dir="right"
+                aria-label="Right"
+              >
+                →
+              </button>
+              <button
+                type="button"
+                class="touch-btn size-10 sm:size-12"
+                data-touch-dir="down-left"
+                aria-label="Down Left"
+              >
+                ↙
+              </button>
+              <button
+                type="button"
+                class="touch-btn size-10 sm:size-12"
+                data-touch-dir="down"
+                aria-label="Down"
+              >
+                ↓
+              </button>
+              <button
+                type="button"
+                class="touch-btn size-10 sm:size-12"
+                data-touch-dir="down-right"
+                aria-label="Down Right"
+              >
+                ↘
+              </button>
+            </div>
+            <div
+              id="touch-attacks"
+              class="pointer-events-auto absolute right-2 bottom-2 grid grid-cols-3 gap-1 sm:right-4 sm:bottom-4"
+            >
+              <button
+                type="button"
+                class="touch-btn size-10 text-xs sm:size-12 sm:text-sm"
+                data-touch-btn="LP"
+              >
+                LP
+              </button>
+              <button
+                type="button"
+                class="touch-btn size-10 text-xs sm:size-12 sm:text-sm"
+                data-touch-btn="MP"
+              >
+                MP
+              </button>
+              <button
+                type="button"
+                class="touch-btn size-10 text-xs sm:size-12 sm:text-sm"
+                data-touch-btn="HP"
+              >
+                HP
+              </button>
+              <button
+                type="button"
+                class="touch-btn size-10 text-xs sm:size-12 sm:text-sm"
+                data-touch-btn="LK"
+              >
+                LK
+              </button>
+              <button
+                type="button"
+                class="touch-btn size-10 text-xs sm:size-12 sm:text-sm"
+                data-touch-btn="MK"
+              >
+                MK
+              </button>
+              <button
+                type="button"
+                class="touch-btn size-10 text-xs sm:size-12 sm:text-sm"
+                data-touch-btn="HK"
+              >
+                HK
+              </button>
+            </div>
           </div>
         </div>
       </div>
