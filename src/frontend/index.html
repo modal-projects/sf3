@@ -66,12 +66,17 @@
                 "0%, 100%": { transform: "rotate(0deg)" },
                 "50%": { transform: "rotate(-90deg)" },
               },
+              "touch-flash": {
+                "0%": { opacity: "1", transform: "translate(-50%, -50%) scale(0.7)" },
+                "100%": { opacity: "0", transform: "translate(-50%, -80%) scale(1.3)" },
+              },
             },
             animation: {
               "character-flash": "character-flash 0.2s 3",
               "skeleton-loading": "skeleton-loading 1.5s ease-in-out infinite",
               "gamepad-pulse": "gamepad-pulse 1.5s ease-in-out infinite",
               "rotate-90": "rotate-90 2s ease-in-out infinite",
+              "touch-flash": "touch-flash 0.5s ease-out forwards",
             },
           },
         },
@@ -117,11 +122,17 @@
         .game-ctrl {
           @apply py-1 px-3 bg-sf-dark border border-sf-green rounded-lg;
         }
-        .touch-btn {
-          @apply flex select-none items-center justify-center rounded-lg border-2 border-sf-green/70 bg-sf-darker/70 font-bold text-sf-beige [touch-action:none];
+        .touch-zone {
+          @apply absolute top-0 bottom-0 w-1/2 [touch-action:none] select-none;
         }
-        .touch-btn.touch-active {
-          @apply border-sf-green bg-sf-green/40 text-sf-green;
+        #touch-stick-base {
+          @apply pointer-events-none absolute left-0 top-0 hidden size-20 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-sf-green/50 bg-sf-darker/40;
+        }
+        #touch-stick-nub {
+          @apply absolute left-1/2 top-1/2 size-8 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-sf-green bg-sf-green/60;
+        }
+        .touch-flash {
+          @apply pointer-events-none absolute left-0 top-0 font-bold text-lg text-sf-green text-glow animate-touch-flash;
         }
         .spinner {
           @apply border-4 border-sf-green/30 border-t-sf-green rounded-full animate-spin;
@@ -432,7 +443,7 @@
         class="hidden size-full min-h-0 flex flex-col overflow-y-auto p-4 md:p-6 lg:p-8"
       >
         <div
-          class="mx-auto flex min-h-full w-full max-w-5xl flex-col items-center justify-center gap-5 lg:gap-7"
+          class="mx-auto my-auto flex w-full max-w-5xl flex-col items-center gap-5 lg:gap-7"
         >
           <div class="flex flex-col items-center">
             <button
@@ -523,123 +534,15 @@
             id="touch-controls"
             class="pointer-events-none absolute inset-0 z-10 hidden"
           >
-            <div
-              id="touch-dpad"
-              class="pointer-events-auto absolute bottom-2 left-2 grid grid-cols-3 gap-1 sm:bottom-4 sm:left-4"
-            >
-              <button
-                type="button"
-                class="touch-btn size-10 sm:size-12"
-                data-touch-dir="up-left"
-                aria-label="Up Left"
-              >
-                ↖
-              </button>
-              <button
-                type="button"
-                class="touch-btn size-10 sm:size-12"
-                data-touch-dir="up"
-                aria-label="Up"
-              >
-                ↑
-              </button>
-              <button
-                type="button"
-                class="touch-btn size-10 sm:size-12"
-                data-touch-dir="up-right"
-                aria-label="Up Right"
-              >
-                ↗
-              </button>
-              <button
-                type="button"
-                class="touch-btn size-10 sm:size-12"
-                data-touch-dir="left"
-                aria-label="Left"
-              >
-                ←
-              </button>
-              <div aria-hidden="true" data-touch-dir="neutral"></div>
-              <button
-                type="button"
-                class="touch-btn size-10 sm:size-12"
-                data-touch-dir="right"
-                aria-label="Right"
-              >
-                →
-              </button>
-              <button
-                type="button"
-                class="touch-btn size-10 sm:size-12"
-                data-touch-dir="down-left"
-                aria-label="Down Left"
-              >
-                ↙
-              </button>
-              <button
-                type="button"
-                class="touch-btn size-10 sm:size-12"
-                data-touch-dir="down"
-                aria-label="Down"
-              >
-                ↓
-              </button>
-              <button
-                type="button"
-                class="touch-btn size-10 sm:size-12"
-                data-touch-dir="down-right"
-                aria-label="Down Right"
-              >
-                ↘
-              </button>
+            <div id="touch-move" class="touch-zone left-0 pointer-events-auto">
+              <div id="touch-stick-base">
+                <div id="touch-stick-nub"></div>
+              </div>
             </div>
             <div
-              id="touch-attacks"
-              class="pointer-events-auto absolute right-2 bottom-2 grid grid-cols-3 gap-1 sm:right-4 sm:bottom-4"
-            >
-              <button
-                type="button"
-                class="touch-btn size-10 text-xs sm:size-12 sm:text-sm"
-                data-touch-btn="LP"
-              >
-                LP
-              </button>
-              <button
-                type="button"
-                class="touch-btn size-10 text-xs sm:size-12 sm:text-sm"
-                data-touch-btn="MP"
-              >
-                MP
-              </button>
-              <button
-                type="button"
-                class="touch-btn size-10 text-xs sm:size-12 sm:text-sm"
-                data-touch-btn="HP"
-              >
-                HP
-              </button>
-              <button
-                type="button"
-                class="touch-btn size-10 text-xs sm:size-12 sm:text-sm"
-                data-touch-btn="LK"
-              >
-                LK
-              </button>
-              <button
-                type="button"
-                class="touch-btn size-10 text-xs sm:size-12 sm:text-sm"
-                data-touch-btn="MK"
-              >
-                MK
-              </button>
-              <button
-                type="button"
-                class="touch-btn size-10 text-xs sm:size-12 sm:text-sm"
-                data-touch-btn="HK"
-              >
-                HK
-              </button>
-            </div>
+              id="touch-attack"
+              class="touch-zone right-0 pointer-events-auto"
+            ></div>
           </div>
         </div>
       </div>
