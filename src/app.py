@@ -66,8 +66,8 @@ launcher_image = modal.Image.debian_slim(python_version="3.12").uv_pip_install(
 gameplay_image = (
     create_gameplay_image(
         extra_python_packages=(
-            "aiortc",
-            "av",
+            "aiortc==1.15.0",
+            "av==17.1.0",
             "fastapi[standard]==0.116.1",
             "websockets==15.0.1",
         )

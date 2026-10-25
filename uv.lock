@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -690,8 +690,8 @@ wheels = [
 
 [[package]]
 name = "modal-dojo"
-version = "0.1.0"
-source = { git = "https://github.com/modal-projects/modal-dojo.git?branch=main#aaed8d543b0732080a62be7e6547fbba68c816bb" }
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "cloudpickle" },
@@ -703,6 +703,10 @@ dependencies = [
     { name = "randomname" },
     { name = "rich" },
     { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/09/79/53d02d523cd9059bcfd44f8ae42e7e2e5d45640047d0cc03f99391e2e7ce/modal_dojo-0.1.1.tar.gz", hash = "sha256:785be94cf6fa9923b378010018d3ee1e44e5f7d1d313e536198a763cd008f33b", size = 1443507, upload-time = "2026-10-24T05:20:18.57Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/63/8d/6dba96fb7266712647d141b5b368875cfd2e0a4b7dfd46c5ec911995ff8b/modal_dojo-0.1.1-py3-none-any.whl", hash = "sha256:cb7e68acd07b594117b0e7fe994b8db40c6a256fabfbf49d759c2b14b05f88c4", size = 759007, upload-time = "2026-10-24T05:20:17.149Z" },
 ]
 
 [[package]]
@@ -1574,7 +1578,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "modal", specifier = "==1.6.1" },
-    { name = "modal-dojo", git = "https://github.com/modal-projects/modal-dojo.git?branch=main" },
+    { name = "modal-dojo", specifier = "==0.1.1" },
 ]
 
 [package.metadata.requires-dev]
