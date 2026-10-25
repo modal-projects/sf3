@@ -126,7 +126,7 @@
           @apply absolute top-0 bottom-0 w-1/2 [touch-action:none] select-none;
         }
         #touch-stick-base {
-          @apply pointer-events-none absolute left-0 top-0 hidden size-20 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-sf-green/50 bg-sf-darker/40;
+          @apply pointer-events-none absolute left-0 top-0 size-20 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-sf-green/50 bg-sf-darker/40;
         }
         #touch-stick-nub {
           @apply absolute left-1/2 top-1/2 size-8 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-sf-green bg-sf-green/60;
@@ -535,7 +535,7 @@
             class="pointer-events-none absolute inset-0 z-10 hidden"
           >
             <div id="touch-move" class="touch-zone left-0 pointer-events-auto">
-              <div id="touch-stick-base">
+              <div id="touch-stick-base" class="hidden">
                 <div id="touch-stick-nub"></div>
               </div>
             </div>

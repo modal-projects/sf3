@@ -32,7 +32,7 @@ const createTouchController = () => {
   const setStickPosition = (x, y) => {
     const nub = byId("touch-stick-nub");
     if (!nub) return;
-    nub.style.transform = `translate(${x}px, ${y}px)`;
+    nub.style.transform = `translate(calc(${x}px - 50%), calc(${y}px - 50%))`;
   };
 
   const showStick = (x, y) => {
@@ -130,7 +130,10 @@ const createTouchController = () => {
     zone.addEventListener("pointermove", (e) => {
       const pointer = attackPointers.get(e.pointerId);
       if (!pointer || pointer.fired) return;
-      const dir = swipeDirection(e.clientX - pointer.ox, e.clientY - pointer.oy);
+      const dx = e.clientX - pointer.ox;
+      const dy = e.clientY - pointer.oy;
+      if (Math.hypot(dx, dy) > 10) clearTimeout(pointer.holdTimer);
+      const dir = swipeDirection(dx, dy);
       if (!dir) return;
       pointer.fired = true;
       clearTimeout(pointer.holdTimer);
