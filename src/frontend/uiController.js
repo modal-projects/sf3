@@ -226,7 +226,7 @@ const createUIController = () => {
 
   const updateControlsDisplay = () => {
     const onPad = GamepadManager.isConnected();
-    const onTouch = navigator.maxTouchPoints > 0;
+    const onTouch = !onPad && navigator.maxTouchPoints > 0;
     const controls = onTouch
       ? {
           "movement-display": "Drag left half",
@@ -236,13 +236,13 @@ const createUIController = () => {
           "lk-display": "Swipe down",
           "mk-display": "Swipe sideways",
           "hk-display": "Swipe up",
-          "lplk-display": "Tap + swipe down",
-          "mpmk-display": "Double-tap + swipe sideways",
-          "hphk-display": "Hold + swipe up",
-          "lkhp-display": "Swipe down + hold",
-          "pp-display": "Tap + double-tap",
-          "ppp-display": "Tap + double-tap + hold",
-          "downppp-display": "Drag down + tap + double-tap + hold",
+          "lplk-display": "Tap + swipe down together",
+          "mpmk-display": "Double-tap + swipe sideways together",
+          "hphk-display": "Hold + swipe up together",
+          "lkhp-display": "Swipe down + hold together",
+          "pp-display": "Tap + double-tap together",
+          "ppp-display": "Tap + double-tap + hold together",
+          "downppp-display": "Drag down + tap + double-tap + hold together",
         }
       : {
           "movement-display": onPad ? "Left Stick / D-Pad" : "WASD / Arrow Keys",

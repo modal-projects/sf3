@@ -141,7 +141,12 @@ const createTouchController = () => {
       if (!pointer) return;
       attackPointers.delete(e.pointerId);
       clearTimeout(pointer.holdTimer);
-      if (pointer.fired) return;
+      if (pointer.fired || e.type === "pointercancel") return;
+      const dir = swipeDirection(e.clientX - pointer.ox, e.clientY - pointer.oy);
+      if (dir) {
+        fireAttack(SWIPE_ATTACKS[dir], e.clientX, e.clientY);
+        return;
+      }
       const now = performance.now();
       const isDouble = now - lastTapAt < DOUBLE_TAP_MS;
       lastTapAt = now;
