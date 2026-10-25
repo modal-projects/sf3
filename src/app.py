@@ -66,8 +66,8 @@ launcher_image = modal.Image.debian_slim(python_version="3.12").uv_pip_install(
 gameplay_image = (
     create_gameplay_image(
         extra_python_packages=(
-            "aiortc",
-            "av",
+            "aiortc==1.15.0",
+            "av==17.1.0",
             "fastapi[standard]==0.116.1",
             "websockets==15.0.1",
         )
@@ -336,6 +336,7 @@ class Web:
 
                 # communication
 
+                self.owner_session_id = None
                 self.stop_event = asyncio.Event()
                 self.frame_buffer = GameFrameBuffer(self.stop_event.is_set)
                 self.outbound_message_queue = asyncio.Queue()
@@ -606,15 +607,31 @@ class Web:
                 await websocket.close(code=1008)
                 return
 
+            session_key = websocket.headers.get("x-modal-server-session-id")
+            if not session_key:
+                await websocket.close(code=1008)
+                return
+
             await websocket.accept()
 
             session = self.game_sessions.get(game_id)
             creating_session = False
+            if session is not None and session.owner_session_id != session_key:
+                await websocket.close(code=1008)
+                return
             if session is None or session.stop_event.is_set():
                 if session is None and len(self.game_sessions) >= MAX_GAME_SESSIONS:
                     await websocket.close(code=1013)
                     return
+                if any(
+                    existing.owner_session_id == session_key
+                    and not existing.stop_event.is_set()
+                    for existing in self.game_sessions.values()
+                ):
+                    await websocket.close(code=1013)
+                    return
                 session = GameSession()
+                session.owner_session_id = session_key
                 creating_session = True
 
             frame_encoder = FrameEncoder()
