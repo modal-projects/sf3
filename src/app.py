@@ -616,6 +616,9 @@ class Web:
 
             session = self.game_sessions.get(game_id)
             creating_session = False
+            if session is not None and session.owner_session_id != session_key:
+                await websocket.close(code=1008)
+                return
             if session is None or session.stop_event.is_set():
                 if session is None and len(self.game_sessions) >= MAX_GAME_SESSIONS:
                     await websocket.close(code=1013)
@@ -630,9 +633,6 @@ class Web:
                 session = GameSession()
                 session.owner_session_id = session_key
                 creating_session = True
-            elif session.owner_session_id != session_key:
-                await websocket.close(code=1008)
-                return
 
             frame_encoder = FrameEncoder()
             video_track = GameVideoTrack(session.frame_buffer)
