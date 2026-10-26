@@ -224,7 +224,7 @@ const createInputController = () => {
     const target = e.target instanceof Element ? e.target : null;
     if (
       target?.closest(
-        "select, button, a, input, textarea, [contenteditable], #help-overlay, #touch-attack"
+        "select, button, a, input, textarea, [contenteditable], #help-overlay"
       ) ||
       (pointerDownAt &&
         Math.hypot(e.clientX - pointerDownAt.x, e.clientY - pointerDownAt.y) >=
@@ -235,10 +235,15 @@ const createInputController = () => {
       document.dispatchEvent(new Event("gameStartRequest"));
       return;
     }
+    if (state.gamePhase === "starting") {
+      WebRtcManager.send("fast_forward", {});
+      return;
+    }
     if (
       state.gamePhase === "selecting" &&
       state.acceptsInput &&
-      target?.closest("#game-frame")
+      target?.closest("#game-frame") &&
+      !target?.closest("#touch-attack")
     ) {
       handleActionFromInput(BITS.LP);
     }

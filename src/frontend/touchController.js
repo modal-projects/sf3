@@ -35,41 +35,15 @@ const createTouchController = () => {
     nub.style.transform = `translate(calc(${x}px - 50%), calc(${y}px - 50%))`;
   };
 
-  const showStick = (x, y) => {
-    const base = byId("touch-stick-base");
-    if (!base) return;
-    base.style.left = `${x}px`;
-    base.style.top = `${y}px`;
-    base.classList.remove("hidden");
-    setStickPosition(0, 0);
-  };
-
-  const hideStick = () => {
-    byId("touch-stick-base")?.classList.add("hidden");
-  };
-
   const stickDirection = (dx, dy) => {
     if (Math.hypot(dx, dy) < STICK_DEAD_ZONE) return 0;
     const octant = Math.round(Math.atan2(dy, dx) / (Math.PI / 4));
     return OCTANT_MASKS[(octant + 8) % 8];
   };
 
-  const flashAttack = (name, x, y) => {
-    const zone = byId("touch-attack");
-    if (!zone) return;
-    const flash = document.createElement("div");
-    flash.className = "touch-flash";
-    flash.textContent = name;
-    flash.style.left = `${x - zone.getBoundingClientRect().left}px`;
-    flash.style.top = `${y - zone.getBoundingClientRect().top}px`;
-    zone.appendChild(flash);
-    setTimeout(() => flash.remove(), 500);
-  };
-
-  const fireAttack = (name, x, y) => {
+  const fireAttack = (name) => {
     attackHeld |= BITS[name];
     InputController.setTouchAttacks(attackHeld);
-    flashAttack(name, x, y);
     setTimeout(() => {
       attackHeld &= ~BITS[name];
       InputController.setTouchAttacks(attackHeld);
@@ -80,9 +54,16 @@ const createTouchController = () => {
     zone.addEventListener("pointerdown", (e) => {
       if (movePointer) return;
       e.preventDefault();
+      const base = byId("touch-stick-base");
+      if (!base) return;
       zone.setPointerCapture(e.pointerId);
-      movePointer = { id: e.pointerId, ox: e.clientX, oy: e.clientY };
-      showStick(e.clientX - zone.getBoundingClientRect().left, e.clientY - zone.getBoundingClientRect().top);
+      const rect = base.getBoundingClientRect();
+      movePointer = {
+        id: e.pointerId,
+        ox: rect.left + rect.width / 2,
+        oy: rect.top + rect.height / 2,
+      };
+      setStickPosition(0, 0);
     });
     zone.addEventListener("pointermove", (e) => {
       if (movePointer?.id !== e.pointerId) return;
@@ -97,7 +78,7 @@ const createTouchController = () => {
     const release = (e) => {
       if (movePointer?.id !== e.pointerId) return;
       movePointer = null;
-      hideStick();
+      setStickPosition(0, 0);
       InputController.setTouchDirection(0);
     };
     zone.addEventListener("pointerup", release);
@@ -124,7 +105,7 @@ const createTouchController = () => {
       pointer.holdTimer = setTimeout(() => {
         if (pointer.fired) return;
         pointer.fired = true;
-        fireAttack("HP", e.clientX, e.clientY);
+        fireAttack("HP");
       }, HOLD_MS);
       attackPointers.set(e.pointerId, pointer);
     });
@@ -136,7 +117,7 @@ const createTouchController = () => {
       pointer.swiped = true;
       pointer.fired = true;
       clearTimeout(pointer.holdTimer);
-      fireAttack(SWIPE_ATTACKS[dir], e.clientX, e.clientY);
+      fireAttack(SWIPE_ATTACKS[dir]);
     });
     const release = (e) => {
       const pointer = attackPointers.get(e.pointerId);
@@ -146,13 +127,13 @@ const createTouchController = () => {
       if (pointer.fired || e.type === "pointercancel") return;
       const dir = swipeDirection(e.clientX - pointer.ox, e.clientY - pointer.oy);
       if (dir) {
-        fireAttack(SWIPE_ATTACKS[dir], e.clientX, e.clientY);
+        fireAttack(SWIPE_ATTACKS[dir]);
         return;
       }
       const now = performance.now();
       const isDouble = now - lastTapAt < DOUBLE_TAP_MS;
       lastTapAt = now;
-      fireAttack(isDouble ? "MP" : "LP", e.clientX, e.clientY);
+      fireAttack(isDouble ? "MP" : "LP");
     };
     zone.addEventListener("pointerup", release);
     zone.addEventListener("pointercancel", release);
@@ -164,7 +145,7 @@ const createTouchController = () => {
     for (const pointer of attackPointers.values()) clearTimeout(pointer.holdTimer);
     attackPointers.clear();
     attackHeld = 0;
-    hideStick();
+    setStickPosition(0, 0);
     InputController.setTouchDirection(0);
     InputController.setTouchAttacks(0);
   };

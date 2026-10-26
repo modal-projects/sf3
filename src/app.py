@@ -490,6 +490,9 @@ class Web:
                     self.invalidate_actions()
                     self.accepts_input = False
                     self.start_requested = True
+                elif message_type == "fast_forward":
+                    if self.game_state["status"] == "starting" and self.env is not None:
+                        self.env.request_fast_forward()
                 elif message_type == "player_action":
                     await self.handle_player_action(data["data"])
 

@@ -312,6 +312,8 @@ class GameEnvironment(Protocol):
 
     def request_stop(self) -> None: ...
 
+    def request_fast_forward(self) -> None: ...
+
     def close(self) -> None: ...
 
 
@@ -395,6 +397,7 @@ class LocalSfiiiAdapter:
         self._closed = False
         self._reset_called = False
         self._stop_requested = threading.Event()
+        self._fast_forward = threading.Event()
         self._matchup_character_lock_installed = False
         self._cpu_opponent_menu_seen = False
         self._selecting = False
@@ -442,6 +445,7 @@ class LocalSfiiiAdapter:
         self._selecting = False
         self._presentation_sink = presentation_sink
         self._new_game(frame_sink, presentation_sink)
+        self._fast_forward.clear()
         return _normalize_local_observation(self._data), {
             "selecting": self._selecting,
             "player1_selected": False,
@@ -644,6 +648,9 @@ class LocalSfiiiAdapter:
     def request_stop(self) -> None:
         self._stop_requested.set()
 
+    def request_fast_forward(self) -> None:
+        self._fast_forward.set()
+
     def close(self) -> None:
         if self._closed:
             return
@@ -661,7 +668,8 @@ class LocalSfiiiAdapter:
         frame_sink: FrameSink | None,
     ) -> None:
         if frame_sink is not None and data.get("frame") is not None:
-            self._frame_pacer.wait()
+            if not self._fast_forward.is_set():
+                self._frame_pacer.wait()
             frame_sink(data["frame"])
 
     def _emit_presentation(self, name: str, **fields: Any) -> None:
