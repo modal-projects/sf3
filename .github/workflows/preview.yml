@@ -1,0 +1,56 @@
+name: Preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: sf3-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      MODAL_ENVIRONMENT: ajhinh-dev
+      SF3_APP_NAME: sf3-pr-${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Stop preview app
+        if: github.event.action == 'closed'
+        run: uv run modal app stop $SF3_APP_NAME -y
+
+      - name: Fetch SF3 ROM from Modal Volume
+        if: github.event.action != 'closed'
+        run: |
+          mkdir -p assets/engine
+          uv run modal volume get sf3-rom sfiii3n.zip assets/engine/sfiii3n.zip
+
+      - name: Deploy preview app
+        if: github.event.action != 'closed'
+        run: uv run modal deploy -m src.app 2>&1 | tee deploy.log
+
+      - name: Comment preview URL
+        if: github.event.action == 'opened' || github.event.action == 'reopened'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          url=$(grep -oE 'https://[^ )]+modal\.run' deploy.log | tail -1)
+          test -n "$url"
+          gh pr comment ${{ github.event.pull_request.number }} --body "Preview: $url"
