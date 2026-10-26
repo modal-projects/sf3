@@ -175,7 +175,11 @@ const createTouchController = () => {
     const inGame = GameState.getCurrentScreen() === "game";
     controls.classList.toggle(
       "hidden",
-      !(inGame && GameState.get().acceptsInput)
+      !(
+        inGame &&
+        GameState.get().acceptsInput &&
+        GameState.get().gamePhase !== "selecting"
+      )
     );
   };
 
