@@ -15,6 +15,7 @@ concurrency:
 jobs:
   preview:
     runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
@@ -44,7 +45,9 @@ jobs:
 
       - name: Deploy preview app
         if: github.event.action != 'closed'
-        run: uv run modal deploy -m src.app 2>&1 | tee deploy.log
+        run: |
+          set -o pipefail
+          uv run modal deploy -m src.app 2>&1 | tee deploy.log
 
       - name: Comment preview URL
         if: github.event.action == 'opened' || github.event.action == 'reopened'
