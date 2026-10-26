@@ -703,7 +703,10 @@ class LocalSfiiiAdapter:
     ) -> None:
         for step in steps:
             presentations = step.get("presentations", {})
-            for frame_number in range(1, step["wait"] + 1):
+            wait = step["wait"]
+            if self._fast_forward.is_set():
+                wait = min(wait, 3)
+            for frame_number in range(1, wait + 1):
                 self._data = self._phase_step([], frame_sink)
                 presentation = presentations.get(frame_number)
                 if presentation_sink is not None and presentation is not None:
