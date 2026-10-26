@@ -54,16 +54,8 @@ const createTouchController = () => {
     zone.addEventListener("pointerdown", (e) => {
       if (movePointer) return;
       e.preventDefault();
-      const base = byId("touch-stick-base");
-      if (!base) return;
       zone.setPointerCapture(e.pointerId);
-      const rect = base.getBoundingClientRect();
-      movePointer = {
-        id: e.pointerId,
-        ox: rect.left + rect.width / 2,
-        oy: rect.top + rect.height / 2,
-      };
-      setStickPosition(0, 0);
+      movePointer = { id: e.pointerId, ox: e.clientX, oy: e.clientY };
     });
     zone.addEventListener("pointermove", (e) => {
       if (movePointer?.id !== e.pointerId) return;
