@@ -66,8 +66,10 @@ const createInputController = () => {
   let touchDirection = 0;
   let touchAttacks = 0;
   let pointerDownAt = null;
+  let lastSelectTapAt = 0;
 
   const POINTER_TAP_DISTANCE_PX = 20;
+  const DOUBLE_TAP_MS = 280;
 
   const getActionFromKeys = () => {
     const state = GameState.get();
@@ -76,7 +78,7 @@ const createInputController = () => {
 
     const attacks = selecting
       ? {
-          LP: keyState["Enter"] || touchAttacks !== 0,
+          LP: keyState["Enter"],
           MP: false,
           HP: false,
           LK: false,
@@ -242,10 +244,12 @@ const createInputController = () => {
     if (
       state.gamePhase === "selecting" &&
       state.acceptsInput &&
-      target?.closest("#game-frame") &&
-      !target?.closest("#touch-attack")
+      target?.closest("#game-frame")
     ) {
-      handleActionFromInput(BITS.LP);
+      const now = performance.now();
+      const isDouble = now - lastSelectTapAt < DOUBLE_TAP_MS;
+      lastSelectTapAt = now;
+      if (isDouble) handleActionFromInput(BITS.LP);
     }
   };
 

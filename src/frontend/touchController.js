@@ -86,6 +86,7 @@ const createTouchController = () => {
   const bindAttacks = (zone) => {
     zone.addEventListener("pointerdown", (e) => {
       e.preventDefault();
+      if (GameState.get().gamePhase === "selecting") return;
       zone.setPointerCapture(e.pointerId);
       const pointer = {
         ox: e.clientX,
