@@ -39,7 +39,8 @@ mimetypes.add_type("image/webp", ".webp")
 
 # Modal setup
 
-app = modal.App(name="sf3")
+app_name = os.environ.get("SF3_APP_NAME", "sf3")
+app = modal.App(name=app_name)
 for model in MODELS.values():
     app.include(model.app)
 
@@ -1600,7 +1601,9 @@ class Web:
     min_containers=1,
 )
 @modal.concurrent(max_inputs=96, target_inputs=64)
-@modal.asgi_app(label="sf3", custom_domains=["sf3.modal.dev"])
+@modal.asgi_app(
+    label=app_name, custom_domains=["sf3.modal.dev"] if app_name == "sf3" else []
+)
 def launcher():
     from urllib.parse import urlencode
 
