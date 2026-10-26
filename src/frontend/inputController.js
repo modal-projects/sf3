@@ -65,6 +65,11 @@ const createInputController = () => {
   let gamepadHeldAttack = 0;
   let touchDirection = 0;
   let touchAttacks = 0;
+  let pointerDownAt = null;
+  let lastSelectTapAt = 0;
+
+  const POINTER_TAP_DISTANCE_PX = 20;
+  const DOUBLE_TAP_MS = 280;
 
   const getActionFromKeys = () => {
     const state = GameState.get();
@@ -73,7 +78,7 @@ const createInputController = () => {
 
     const attacks = selecting
       ? {
-          LP: keyState["Enter"] || touchAttacks !== 0,
+          LP: keyState["Enter"],
           MP: false,
           HP: false,
           LK: false,
@@ -215,9 +220,46 @@ const createInputController = () => {
     handleActionFromInput(0);
   };
 
+  const handlePointerSelect = (e) => {
+    const state = GameState.get();
+    if (!state.loaded) return;
+    const target = e.target instanceof Element ? e.target : null;
+    if (
+      target?.closest(
+        "select, button, a, input, textarea, [contenteditable], #help-overlay"
+      ) ||
+      (pointerDownAt &&
+        Math.hypot(e.clientX - pointerDownAt.x, e.clientY - pointerDownAt.y) >=
+          POINTER_TAP_DISTANCE_PX)
+    )
+      return;
+    if (state.gamePhase === "pregame") {
+      document.dispatchEvent(new Event("gameStartRequest"));
+      return;
+    }
+    if (state.gamePhase === "starting") {
+      WebRtcManager.send("fast_forward", {});
+      return;
+    }
+    if (
+      state.gamePhase === "selecting" &&
+      state.acceptsInput &&
+      target?.closest("#game-frame")
+    ) {
+      const now = performance.now();
+      const isDouble = now - lastSelectTapAt < DOUBLE_TAP_MS;
+      lastSelectTapAt = now;
+      if (isDouble) handleActionFromInput(BITS.LP);
+    }
+  };
+
   const init = () => {
     document.addEventListener("keydown", (e) => handleKeyboardEvent(e, true));
     document.addEventListener("keyup", (e) => handleKeyboardEvent(e, false));
+    document.addEventListener("pointerdown", (e) => {
+      pointerDownAt = { x: e.clientX, y: e.clientY };
+    });
+    document.addEventListener("click", handlePointerSelect);
     window.addEventListener("blur", releaseAllKeys);
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) releaseAllKeys();
