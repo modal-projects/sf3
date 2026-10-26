@@ -66,13 +66,8 @@ const createInputController = () => {
   let touchDirection = 0;
   let touchAttacks = 0;
   let pointerDownAt = null;
-  let pendingSelectTap = null;
 
   const POINTER_TAP_DISTANCE_PX = 20;
-  const SELECT_DOUBLE_TAP_MS = 300;
-  const SELECT_TAP_DEAD_ZONE = 0.1;
-  const SELECT_TAP_PRESS_MS = 80;
-  const SELECT_TAP_GAP_MS = 40;
 
   const getActionFromKeys = () => {
     const state = GameState.get();
@@ -223,34 +218,6 @@ const createInputController = () => {
     handleActionFromInput(0);
   };
 
-  const pulseSelectionDirection = (mask) => {
-    handleActionFromInput(mask);
-    setTimeout(
-      () => handleActionFromInput(getActionFromKeys() & ~ATTACK_MASK),
-      SELECT_TAP_PRESS_MS
-    );
-  };
-
-  const navigateToTap = (x, y) => {
-    const rect = document
-      .getElementById("game-frame")
-      ?.getBoundingClientRect();
-    if (!rect) return;
-    const dx = x - (rect.left + rect.width / 2);
-    const dy = y - (rect.top + rect.height / 2);
-    const masks = [];
-    if (Math.abs(dx) > rect.width * SELECT_TAP_DEAD_ZONE)
-      masks.push(dx > 0 ? BITS.right : BITS.left);
-    if (Math.abs(dy) > rect.height * SELECT_TAP_DEAD_ZONE)
-      masks.push(dy > 0 ? BITS.down : BITS.up);
-    masks.forEach((mask, i) =>
-      setTimeout(
-        () => pulseSelectionDirection(mask),
-        i * (SELECT_TAP_PRESS_MS + SELECT_TAP_GAP_MS)
-      )
-    );
-  };
-
   const handlePointerSelect = (e) => {
     const state = GameState.get();
     if (!state.loaded) return;
@@ -273,16 +240,7 @@ const createInputController = () => {
       state.acceptsInput &&
       target?.closest("#game-frame")
     ) {
-      if (pendingSelectTap) {
-        clearTimeout(pendingSelectTap);
-        pendingSelectTap = null;
-        handleActionFromInput(BITS.LP);
-        return;
-      }
-      pendingSelectTap = setTimeout(() => {
-        pendingSelectTap = null;
-        navigateToTap(e.clientX, e.clientY);
-      }, SELECT_DOUBLE_TAP_MS);
+      handleActionFromInput(BITS.LP);
     }
   };
 

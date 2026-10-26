@@ -173,14 +173,7 @@ const createTouchController = () => {
     const controls = byId("touch-controls");
     if (!controls) return;
     const inGame = GameState.getCurrentScreen() === "game";
-    controls.classList.toggle(
-      "hidden",
-      !(
-        inGame &&
-        GameState.get().acceptsInput &&
-        GameState.get().gamePhase !== "selecting"
-      )
-    );
+    controls.classList.toggle("hidden", !inGame);
   };
 
   const init = () => {
