@@ -84,7 +84,6 @@ gameplay_image = (
     image=gameplay_image,
     compute_region=CONTAINER_REGION,
     routing_region=ROUTING_REGION,
-    min_containers=1,
     max_concurrency=MAX_GAME_SESSIONS,
     secrets=[modal.Secret.from_name("turn-credentials")],
     port=GAMEPLAY_PORT,
