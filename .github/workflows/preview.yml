@@ -19,7 +19,8 @@ jobs:
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
-      MODAL_ENVIRONMENT: ajhinh-dev
+      MODAL_ENVIRONMENT: demos
+      MODAL_IMAGE_BUILDER_VERSION: "2025.06"
       SF3_APP_NAME: sf3-pr-${{ github.event.pull_request.number }}
     steps:
       - uses: actions/checkout@v4
